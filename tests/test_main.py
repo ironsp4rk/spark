@@ -4,9 +4,9 @@ import sys
 import unittest
 from unittest.mock import MagicMock, mock_open, patch
 
-# Add parent directory to path to import the main module
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import main
+# Add src directory to path to import the spark package
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
+from spark import main
 
 
 class TestSparkInstaller(unittest.TestCase):
@@ -152,11 +152,11 @@ class TestSparkInstaller(unittest.TestCase):
             written_content,
         )
 
-    @patch("main.get_remote_version")
-    @patch("main.get_local_version")
-    @patch("main.download_file")
-    @patch("main.verify_gpg")
-    @patch("main.load_recipe")
+    @patch("spark.main.get_remote_version")
+    @patch("spark.main.get_local_version")
+    @patch("spark.main.download_file")
+    @patch("spark.main.verify_gpg")
+    @patch("spark.main.load_recipe")
     def test_main_no_force_already_up_to_date(
         self,
         mock_load_recipe,
@@ -180,16 +180,16 @@ class TestSparkInstaller(unittest.TestCase):
 
         mock_download.assert_not_called()
 
-    @patch("main.get_remote_version")
-    @patch("main.get_local_version")
-    @patch("main.download_file")
-    @patch("main.verify_gpg")
-    @patch("main.extract_archive")
-    @patch("main.make_executable")
-    @patch("main.create_symlink")
-    @patch("main.update_desktop_entry")
-    @patch("main.ensure_not_running")
-    @patch("main.load_recipe")
+    @patch("spark.main.get_remote_version")
+    @patch("spark.main.get_local_version")
+    @patch("spark.main.download_file")
+    @patch("spark.main.verify_gpg")
+    @patch("spark.main.extract_archive")
+    @patch("spark.main.make_executable")
+    @patch("spark.main.create_symlink")
+    @patch("spark.main.update_desktop_entry")
+    @patch("spark.main.ensure_not_running")
+    @patch("spark.main.load_recipe")
     def test_main_force_already_up_to_date(
         self,
         mock_load_recipe,
@@ -235,12 +235,12 @@ class TestSparkInstaller(unittest.TestCase):
         mock_run.return_value.returncode = 1
         self.assertFalse(main.is_process_running("fake_app"))
 
-    @patch("main.is_process_running")
+    @patch("spark.main.is_process_running")
     def test_ensure_not_running_inactive(self, mock_is_running):
         mock_is_running.return_value = False
         main.ensure_not_running("fake_app")
 
-    @patch("main.is_process_running")
+    @patch("spark.main.is_process_running")
     @patch("builtins.input")
     def test_ensure_not_running_abort(self, mock_input, mock_is_running):
         mock_is_running.return_value = True
@@ -249,7 +249,7 @@ class TestSparkInstaller(unittest.TestCase):
             main.ensure_not_running("fake_app")
         self.assertEqual(cm.exception.code, 1)
 
-    @patch("main.is_process_running")
+    @patch("spark.main.is_process_running")
     @patch("builtins.input")
     def test_ensure_not_running_retry(self, mock_input, mock_is_running):
         mock_is_running.side_effect = [True, False]
@@ -257,7 +257,7 @@ class TestSparkInstaller(unittest.TestCase):
         main.ensure_not_running("fake_app")
         self.assertEqual(mock_input.call_count, 1)
 
-    @patch("main.is_process_running")
+    @patch("spark.main.is_process_running")
     @patch("builtins.input")
     @patch("subprocess.run")
     def test_ensure_not_running_kill(self, mock_run, mock_input, mock_is_running):
