@@ -1,2 +1,382 @@
-def test_hello():
-    assert True
+import io
+import os
+import sys
+import unittest
+from unittest.mock import MagicMock, mock_open, patch
+
+# Add parent directory to path to import the main module
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import main
+
+
+class TestSparkInstaller(unittest.TestCase):
+    @patch("urllib.request.urlopen")
+    def test_get_remote_version(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = (
+            b'<html><p class="latest"><i>Version:</i> Version 1.0.0</p></html>'
+        )
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        recipe = {
+            "version": {
+                "url": "https://example.com",
+                "pattern": r"Version\s+(\d+\.\d+\.\d+)",
+            }
+        }
+        version = main.get_remote_version(recipe)
+        self.assertEqual(version, "1.0.0")
+
+    @patch("os.path.exists")
+    @patch("subprocess.run")
+    def test_get_local_version_installed(self, mock_run, mock_exists):
+        mock_exists.return_value = True
+
+        mock_proc = MagicMock()
+        mock_proc.stdout = "Fake App Version 0.9.0\n"
+        mock_run.return_value = mock_proc
+
+        recipe = {
+            "package": {"bin_name": "fakebin"},
+            "install": {
+                "target_dir": "~/.local/opt/fake_app",
+                "executable_path": "fake_app",
+            },
+            "version": {"pattern": r"Version\s+(\d+\.\d+\.\d+)"},
+        }
+
+        version = main.get_local_version(recipe)
+        self.assertEqual(version, "0.9.0")
+
+    @patch("os.path.exists")
+    @patch("subprocess.run")
+    def test_get_local_version_with_local_pattern(self, mock_run, mock_exists):
+        mock_exists.return_value = True
+
+        mock_proc = MagicMock()
+        mock_proc.stdout = "v1.2.3-release\n"
+        mock_run.return_value = mock_proc
+
+        recipe = {
+            "package": {"bin_name": "fakebin"},
+            "install": {
+                "target_dir": "~/.local/opt/fake_app",
+                "executable_path": "fake_app",
+            },
+            "version": {
+                "pattern": r"Version\s+(\d+\.\d+\.\d+)",
+                "local_pattern": r"v(\d+\.\d+\.\d+)",
+            },
+        }
+
+        version = main.get_local_version(recipe)
+        self.assertEqual(version, "1.2.3")
+
+    @patch("os.path.exists")
+    def test_get_local_version_not_installed(self, mock_exists):
+        mock_exists.return_value = False
+        recipe = {
+            "package": {"bin_name": "fakebin"},
+            "install": {
+                "target_dir": "~/.local/opt/fake_app",
+                "executable_path": "fake_app",
+            },
+            "version": {"pattern": r"Version\s+(\d+\.\d+\.\d+)"},
+        }
+        version = main.get_local_version(recipe)
+        self.assertEqual(version, "")
+
+    @patch("subprocess.run")
+    def test_verify_gpg_success(self, mock_run):
+        mock_run.return_value.returncode = 0
+        try:
+            main.verify_gpg("tarball", "sig", "pubkey", "/tmp")
+        except SystemExit:
+            self.fail("verify_gpg raised SystemExit unexpectedly")
+
+    @patch("subprocess.run")
+    def test_verify_gpg_fail(self, mock_run):
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stderr = "gpg: BAD signature"
+
+        with self.assertRaises(SystemExit):
+            main.verify_gpg("tarball", "sig", "pubkey", "/tmp")
+
+    @patch("os.makedirs")
+    @patch("os.path.expanduser")
+    @patch("os.path.exists")
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=(
+            "[Desktop Entry]\n"
+            "Version=1.0\n"
+            "Type=Application\n"
+            "Name=Fake App\n"
+            "Exec=/opt/fake_app/fake_app %F\n"
+            "Icon=fake-app\n"
+        ),
+    )
+    @patch("subprocess.run")
+    def test_update_desktop_entry(
+        self, mock_run, mock_file, mock_exists, mock_expanduser, mock_makedirs
+    ):
+        mock_expanduser.side_effect = lambda path: path.replace("~", "/home/user")
+        mock_exists.side_effect = lambda path: True
+
+        recipe = {
+            "install": {"executable_path": "fake_app"},
+            "integration": {
+                "desktop_file": "fake-app.desktop",
+                "icon": "Icon/256x256/fake-app.png",
+            },
+        }
+
+        main.update_desktop_entry(recipe, "/home/user/.local/opt/fake_app")
+
+        mock_file.assert_any_call(
+            "/home/user/.local/opt/fake_app/fake-app.desktop", "r"
+        )
+        mock_file.assert_any_call(
+            "/home/user/.local/share/applications/fake-app.desktop", "w"
+        )
+
+        write_calls = mock_file().write.call_args_list
+        written_content = "".join(call[0][0] for call in write_calls)
+        self.assertIn(
+            "Exec=/home/user/.local/opt/fake_app/fake_app %F",
+            written_content,
+        )
+        self.assertIn(
+            "Icon=/home/user/.local/opt/fake_app/Icon/256x256/fake-app.png",
+            written_content,
+        )
+
+    @patch("main.get_remote_version")
+    @patch("main.get_local_version")
+    @patch("main.download_file")
+    @patch("main.verify_gpg")
+    @patch("main.load_recipe")
+    def test_main_no_force_already_up_to_date(
+        self,
+        mock_load_recipe,
+        mock_verify,
+        mock_download,
+        mock_local_version,
+        mock_remote_version,
+    ):
+        mock_remote_version.return_value = "1.0.0"
+        mock_local_version.return_value = "1.0.0"
+        mock_load_recipe.return_value = {
+            "package": {"name": "fake-app"},
+            "version": {"url": "url", "pattern": "pat"},
+            "install": {"target_dir": "dir"},
+        }
+
+        with patch("sys.argv", ["spark", "install", "fake-app"]):
+            with self.assertRaises(SystemExit) as cm:
+                main.main()
+            self.assertEqual(cm.exception.code, 0)
+
+        mock_download.assert_not_called()
+
+    @patch("main.get_remote_version")
+    @patch("main.get_local_version")
+    @patch("main.download_file")
+    @patch("main.verify_gpg")
+    @patch("main.extract_archive")
+    @patch("main.make_executable")
+    @patch("main.create_symlink")
+    @patch("main.update_desktop_entry")
+    @patch("main.ensure_not_running")
+    @patch("main.load_recipe")
+    def test_main_force_already_up_to_date(
+        self,
+        mock_load_recipe,
+        mock_ensure_not_running,
+        mock_update_desktop,
+        mock_create_symlink,
+        mock_make_executable,
+        mock_extract_archive,
+        mock_verify,
+        mock_download,
+        mock_local_version,
+        mock_remote_version,
+    ):
+        mock_remote_version.return_value = "1.0.0"
+        mock_local_version.return_value = "1.0.0"
+        mock_load_recipe.return_value = {
+            "package": {"name": "fake-app"},
+            "version": {"url": "url", "pattern": "pat"},
+            "download": {
+                "url": "http://example.com/{version}.tar.xz",
+                "format": "tar.xz",
+            },
+            "install": {"target_dir": "dir", "executable_path": "fakebin"},
+        }
+
+        with patch("sys.argv", ["spark", "install", "fake-app", "--force"]):
+            main.main()
+
+        self.assertTrue(mock_download.called)
+        mock_ensure_not_running.assert_called_once()
+        mock_extract_archive.assert_called_once()
+        mock_make_executable.assert_called_once()
+        mock_create_symlink.assert_called_once()
+        mock_update_desktop.assert_called_once()
+
+    @patch("subprocess.run")
+    def test_is_process_running_true(self, mock_run):
+        mock_run.return_value.returncode = 0
+        self.assertTrue(main.is_process_running("fake_app"))
+
+    @patch("subprocess.run")
+    def test_is_process_running_false(self, mock_run):
+        mock_run.return_value.returncode = 1
+        self.assertFalse(main.is_process_running("fake_app"))
+
+    @patch("main.is_process_running")
+    def test_ensure_not_running_inactive(self, mock_is_running):
+        mock_is_running.return_value = False
+        main.ensure_not_running("fake_app")
+
+    @patch("main.is_process_running")
+    @patch("builtins.input")
+    def test_ensure_not_running_abort(self, mock_input, mock_is_running):
+        mock_is_running.return_value = True
+        mock_input.return_value = "a"
+        with self.assertRaises(SystemExit) as cm:
+            main.ensure_not_running("fake_app")
+        self.assertEqual(cm.exception.code, 1)
+
+    @patch("main.is_process_running")
+    @patch("builtins.input")
+    def test_ensure_not_running_retry(self, mock_input, mock_is_running):
+        mock_is_running.side_effect = [True, False]
+        mock_input.return_value = "r"
+        main.ensure_not_running("fake_app")
+        self.assertEqual(mock_input.call_count, 1)
+
+    @patch("main.is_process_running")
+    @patch("builtins.input")
+    @patch("subprocess.run")
+    def test_ensure_not_running_kill(self, mock_run, mock_input, mock_is_running):
+        mock_is_running.side_effect = [True, False]
+        mock_input.return_value = "k"
+        main.ensure_not_running("fake_app")
+        mock_run.assert_called_once_with(["pkill", "-x", "fake_app"])
+
+    @patch("os.path.exists")
+    @patch("os.chmod")
+    def test_make_executable(self, mock_chmod, mock_exists):
+        mock_exists.return_value = True
+        recipe = {
+            "install": {
+                "executable_path": "fake_app",
+                "additional_executables": ["helper_tool"],
+            }
+        }
+        main.make_executable(recipe, "/opt/fake")
+        mock_chmod.assert_any_call("/opt/fake/fake_app", 0o755)
+        mock_chmod.assert_any_call("/opt/fake/helper_tool", 0o755)
+
+    @patch("os.makedirs")
+    @patch("os.path.exists")
+    @patch("os.remove")
+    @patch("os.symlink")
+    def test_create_symlink_custom_bin_dir(
+        self, mock_symlink, mock_remove, mock_exists, mock_makedirs
+    ):
+        mock_exists.return_value = True
+        recipe = {
+            "package": {"bin_name": "fakebin_custom"},
+            "install": {
+                "executable_path": "fake_app",
+                "bin_dir": "/custom/bin",
+            },
+        }
+        main.create_symlink(recipe, "/opt/fake")
+        mock_makedirs.assert_called_once_with("/custom/bin", exist_ok=True)
+        mock_remove.assert_called_once_with("/custom/bin/fakebin_custom")
+        mock_symlink.assert_called_once_with(
+            "/opt/fake/fake_app", "/custom/bin/fakebin_custom"
+        )
+
+    @patch("os.path.expanduser")
+    @patch("os.path.exists")
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=b"[package]\nname = 'direct'\n",
+    )
+    def test_load_recipe_direct_path(self, mock_file, mock_exists, mock_expanduser):
+        mock_expanduser.side_effect = lambda path: path.replace("~", "/home/user")
+        mock_exists.side_effect = lambda path: path == "/home/user/recipe.toml"
+        recipe = main.load_recipe("~/recipe.toml")
+        self.assertEqual(recipe.get("package", {}).get("name"), "direct")
+        mock_file.assert_called_once_with(
+            os.path.abspath("/home/user/recipe.toml"), "rb"
+        )
+
+    @patch("os.path.expanduser")
+    @patch("os.path.exists")
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=b"[package]\nname = 'direct'\n",
+    )
+    @patch("sys.stdout", new_callable=io.StringIO)
+    def test_load_recipe_prints_path(
+        self, mock_stdout, mock_file, mock_exists, mock_expanduser
+    ):
+        mock_expanduser.side_effect = lambda path: path.replace("~", "/home/user")
+        mock_exists.side_effect = lambda path: path == "/home/user/recipe.toml"
+        main.load_recipe("~/recipe.toml")
+        expected_path = os.path.abspath("/home/user/recipe.toml")
+        self.assertIn(f"Using recipe: {expected_path}", mock_stdout.getvalue())
+
+    @patch("os.path.expanduser")
+    @patch("os.path.exists")
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=b"[package]\nname = 'local'\n",
+    )
+    def test_load_recipe_prioritize_local(
+        self, mock_file, mock_exists, mock_expanduser
+    ):
+        mock_expanduser.side_effect = lambda path: path.replace("~", "/home/user")
+        expected_local_path = os.path.abspath("./config/spark/recipes/myrecipe.toml")
+        mock_exists.side_effect = lambda path: path == expected_local_path
+
+        recipe = main.load_recipe("myrecipe")
+        self.assertEqual(recipe.get("package", {}).get("name"), "local")
+        mock_file.assert_called_once_with(expected_local_path, "rb")
+
+    @patch("os.path.expanduser")
+    @patch("os.path.exists")
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=b"[package]\nname = 'global'\n",
+    )
+    def test_load_recipe_fallback_global(self, mock_file, mock_exists, mock_expanduser):
+        mock_expanduser.side_effect = lambda path: path.replace("~", "/home/user")
+        expected_global_path = "/home/user/.config/spark/recipes/myrecipe.toml"
+        mock_exists.side_effect = lambda path: path == expected_global_path
+
+        recipe = main.load_recipe("myrecipe")
+        self.assertEqual(recipe.get("package", {}).get("name"), "global")
+        mock_file.assert_called_once_with(expected_global_path, "rb")
+
+    @patch("os.path.expanduser")
+    @patch("os.path.exists")
+    def test_load_recipe_not_found(self, mock_exists, mock_expanduser):
+        mock_expanduser.side_effect = lambda path: path.replace("~", "/home/user")
+        mock_exists.return_value = False
+        with self.assertRaises(SystemExit):
+            main.load_recipe("myrecipe")
+
+
+if __name__ == "__main__":
+    unittest.main()

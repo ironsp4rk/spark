@@ -49,8 +49,8 @@ url = "[https://www.sublimetext.com/download](https://www.sublimetext.com/downlo
 pattern = 'Build\s+(\d+)'
 
 [download]
-url = "[https://download.sublimetext.com/sublime_text_build](https://download.sublimetext.com/sublime_text_build)_{version}_x64.tar.xz"
-format = "tar.xz"
+url = "[https://download.sublimetext.com/sublime_text_build](https://download.sublimetext.com/sublime_text_build)_{version}_x64.archive"
+format = "zip"
 
 [download.verify] # Optional block
 type = "gpg"
