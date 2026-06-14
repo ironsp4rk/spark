@@ -4,6 +4,10 @@
 * **Command:** `spark`
 * **Environment:** Linux (SteamOS / KDE Plasma), Immutable Root Filesystem
 * **Language:** Python
+* **Package Manager / Tooling:** `uv`
+* **Linter & Formatter:** `ruff`
+* **Static Analysis:** `mypy`
+* **Test Framework:** `pytest`
 
 ## Project Objective
 `spark` is a custom, standalone package manager designed to acquire, extract, and integrate pre-compiled application binaries from arbitrary web sources into user-space (`~/.local`). It bypasses system-level package managers to operate flawlessly on read-only root filesystems.
@@ -13,6 +17,7 @@
 * **Declarative Configs:** Application installations are defined entirely by local TOML recipes.
 * **Idempotency:** Re-running an installation should safely overwrite/update existing files without leaving orphaned data.
 * **Coding Standard:** Write robust, error-handled Python. Prioritize objective correctness and execution speed.
+* **Verification Workflow:** Always run the linter (`uv run ruff check`), formatter (`uv run ruff format`), static type checker (`uv run mypy .`), and tests (`uv run pytest`) after making any code changes.
 
 ## Directory Structure
 * **Recipes:** `~/.config/spark/recipes/` (Contains the `.toml` files)
