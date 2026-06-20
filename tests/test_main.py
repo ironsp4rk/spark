@@ -118,7 +118,7 @@ class TestSparkInstaller(unittest.TestCase):
         ),
     )
     @patch("subprocess.run")
-    def test_update_desktop_entry(
+    def test_install_desktop_file(
         self, mock_run, mock_file, mock_exists, mock_expanduser, mock_makedirs
     ):
         mock_expanduser.side_effect = lambda path: path.replace("~", "/home/user")
@@ -132,7 +132,7 @@ class TestSparkInstaller(unittest.TestCase):
             },
         }
 
-        main.update_desktop_entry(recipe, "/home/user/.local/opt/fake_app")
+        main.install_desktop_file(recipe, "/home/user/.local/opt/fake_app")
 
         mock_file.assert_any_call(
             "/home/user/.local/opt/fake_app/fake-app.desktop", "r"
@@ -187,7 +187,7 @@ class TestSparkInstaller(unittest.TestCase):
     @patch("spark.main.extract_archive")
     @patch("spark.main.make_executable")
     @patch("spark.main.create_symlink")
-    @patch("spark.main.update_desktop_entry")
+    @patch("spark.main.install_desktop_file")
     @patch("spark.main.ensure_not_running")
     @patch("spark.main.load_recipe")
     def test_main_force_already_up_to_date(
@@ -376,6 +376,93 @@ class TestSparkInstaller(unittest.TestCase):
         mock_exists.return_value = False
         with self.assertRaises(SystemExit):
             main.load_recipe("myrecipe")
+
+    @patch("os.makedirs")
+    @patch("os.path.expanduser")
+    @patch("os.path.exists")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("subprocess.run")
+    def test_install_desktop_file_generate(
+        self, mock_run, mock_file, mock_exists, mock_expanduser, mock_makedirs
+    ):
+        mock_expanduser.side_effect = lambda path: path.replace("~", "/home/user")
+        mock_exists.return_value = False
+
+        recipe = {
+            "package": {
+                "name": "generated-app",
+                "description": "A generated application",
+            },
+            "install": {
+                "executable_path": "gen_app",
+            },
+            "integration": {
+                "generate": True,
+                "icon": "/absolute/path/to/icon.png",
+                "desktop": {
+                    "Name": "Generated App",
+                    "Categories": "Utility;",
+                    "Terminal": True,
+                    "MimeType": "x-scheme-handler/gen-app;",
+                    "StartupNotify": True,
+                    "X-Custom-Key": "CustomValue",
+                },
+            },
+        }
+
+        main.install_desktop_file(recipe, "/home/user/.local/opt/gen_app")
+
+        mock_file.assert_called_once_with(
+            "/home/user/.local/share/applications/generated-app.desktop", "w"
+        )
+
+        write_calls = mock_file().write.call_args_list
+        written_content = "".join(call[0][0] for call in write_calls)
+        self.assertIn("[Desktop Entry]", written_content)
+        self.assertIn("Type=Application", written_content)
+        self.assertIn("Name=Generated App", written_content)
+        self.assertIn("Exec=/home/user/.local/opt/gen_app/gen_app", written_content)
+        self.assertIn("Icon=/absolute/path/to/icon.png", written_content)
+        self.assertIn("Terminal=true", written_content)
+        self.assertIn("Categories=Utility;", written_content)
+        self.assertIn("MimeType=x-scheme-handler/gen-app;", written_content)
+        self.assertIn("StartupNotify=true", written_content)
+        self.assertIn("X-Custom-Key=CustomValue", written_content)
+
+    @patch("os.makedirs")
+    @patch("os.path.expanduser")
+    @patch("os.path.exists")
+    @patch("shutil.copy2")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("subprocess.run")
+    def test_install_desktop_file_copy_icon_from_recipe(
+        self,
+        mock_run,
+        mock_file,
+        mock_copy,
+        mock_exists,
+        mock_expanduser,
+        mock_makedirs,
+    ):
+        mock_expanduser.side_effect = lambda path: path.replace("~", "/home/user")
+        mock_exists.side_effect = lambda path: path == "/home/user/recipes/icon.png"
+
+        recipe = {
+            "package": {"name": "App"},
+            "install": {"executable_path": "app"},
+            "_recipe_dir": "/home/user/recipes",
+            "integration": {
+                "generate": True,
+                "icon": "icon.png",
+                "desktop": {"Name": "App"},
+            },
+        }
+
+        main.install_desktop_file(recipe, "/home/user/.local/opt/app")
+
+        mock_copy.assert_called_once_with(
+            "/home/user/recipes/icon.png", "/home/user/.local/opt/app/icon.png"
+        )
 
     @patch("spark.main.get_remote_version")
     @patch("spark.main.get_local_version")

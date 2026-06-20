@@ -33,6 +33,7 @@ def load_recipe(recipe_path_or_name: str) -> Dict[str, Any]:
     try:
         with open(path, "rb") as f:
             recipe = tomllib.load(f)
+            recipe["_recipe_dir"] = os.path.dirname(path)
             print(f"Using recipe: {path}")
             return recipe
     except Exception as e:
@@ -265,22 +266,81 @@ def create_symlink(recipe: Dict[str, Any], target_dir: str, dry_run: bool = Fals
         os.symlink(target_exec, symlink_path)
 
 
-def update_desktop_entry(
-    recipe: Dict[str, Any], target_dir: str, dry_run: bool = False, active_dir: str = ""
-):
+def resolve_icon_path(recipe: Dict[str, Any], target_dir: str) -> tuple[str, str]:
     integration = recipe.get("integration", {})
-    desktop_file = integration.get("desktop_file")
-    if not desktop_file:
-        return
+    icon_rel_path = integration.get("icon")
+    if not icon_rel_path:
+        return "", ""
 
-    check_dir = active_dir if active_dir else target_dir
-    src_desktop = os.path.join(check_dir, desktop_file)
+    expanded_icon = os.path.expanduser(icon_rel_path)
+    if os.path.isabs(expanded_icon):
+        return expanded_icon, ""
+
+    # Check if it exists in target_dir
+    target_icon = os.path.join(target_dir, icon_rel_path)
+    if os.path.exists(target_icon):
+        return target_icon, ""
+
+    # Check recipe directory
+    recipe_dir = recipe.get("_recipe_dir")
+    if recipe_dir:
+        recipe_icon = os.path.join(recipe_dir, icon_rel_path)
+        if os.path.exists(recipe_icon):
+            dest_icon = os.path.join(target_dir, os.path.basename(icon_rel_path))
+            return dest_icon, recipe_icon
+        else:
+            print(
+                f"Warning: Icon file '{icon_rel_path}' not found in target_dir or recipe directory.",
+                file=sys.stderr,
+            )
+    else:
+        print(
+            f"Warning: Icon file '{icon_rel_path}' not found in target_dir.",
+            file=sys.stderr,
+        )
+    return "", ""
+
+
+def generate_new_desktop_file(
+    recipe: Dict[str, Any], target_dir: str, icon_path: str
+) -> str:
+    integration = recipe.get("integration", {})
+    desktop_config = integration.get("desktop", {})
+    lines = ["[Desktop Entry]"]
+    lines.append("Type=Application")
+
+    # Override target executable path and icon path
+    executable_path = recipe.get("install", {}).get("executable_path", "")
+    new_exec = os.path.join(target_dir, executable_path)
+    exec_args = integration.get("exec_args")
+    if exec_args:
+        new_exec = f"{new_exec} {exec_args}"
+
+    # Write all key/value pairs from TOML [integration.desktop] directly
+    for k, v in desktop_config.items():
+        if k.lower() in ("exec", "icon", "type"):
+            continue
+        if isinstance(v, bool):
+            v = "true" if v else "false"
+        lines.append(f"{k}={v}")
+
+    lines.append(f"Exec={new_exec}")
+    if icon_path:
+        lines.append(f"Icon={icon_path}")
+
+    return "\n".join(lines) + "\n"
+
+
+def patch_existing_desktop_file(
+    recipe: Dict[str, Any], target_dir: str, icon_path: str, desktop_file: str
+) -> str:
+    src_desktop = os.path.join(target_dir, desktop_file)
     if not os.path.exists(src_desktop):
         print(
             f"Warning: {desktop_file} not found in extracted files.",
             file=sys.stderr,
         )
-        return
+        return ""
 
     with open(src_desktop, "r") as f:
         content = f.read()
@@ -296,9 +356,7 @@ def update_desktop_entry(
         flags=re.MULTILINE,
     )
 
-    icon_rel_path = integration.get("icon")
-    if icon_rel_path:
-        icon_path = os.path.join(target_dir, icon_rel_path)
+    if icon_path:
         content = re.sub(
             r"^Icon=.*$",
             f"Icon={icon_path}",
@@ -306,17 +364,56 @@ def update_desktop_entry(
             flags=re.MULTILINE,
         )
 
+    return content
+
+
+def install_desktop_file(
+    recipe: Dict[str, Any], target_dir: str, dry_run: bool = False, active_dir: str = ""
+):
+    integration = recipe.get("integration", {})
+    desktop_file = integration.get("desktop_file")
+    generate = integration.get("generate", False)
+
+    if not desktop_file and not generate:
+        return
+
+    if not desktop_file:
+        pkg_name = recipe.get("package", {}).get("name", "app")
+        desktop_file = f"{pkg_name}.desktop"
+
+    check_dir = active_dir if active_dir else target_dir
+    icon_path, icon_source = resolve_icon_path(recipe, check_dir)
+
+    if dry_run and icon_path and check_dir != target_dir:
+        planned_icon = icon_path.replace(check_dir, target_dir, 1)
+    else:
+        planned_icon = icon_path
+
+    if generate:
+        content = generate_new_desktop_file(recipe, target_dir, planned_icon)
+    else:
+        content = patch_existing_desktop_file(
+            recipe, check_dir, planned_icon, desktop_file
+        )
+        if not content:
+            return
+
     desktop_dir = os.path.expanduser("~/.local/share/applications")
     dest_path = os.path.join(desktop_dir, os.path.basename(desktop_file))
 
     if dry_run:
         print(f"[Dry-run] Would create directory: {desktop_dir}")
+        if icon_source:
+            print(f"[Dry-run] Would copy icon from {icon_source} to {planned_icon}")
         print(f"[Dry-run] Would create/update desktop entry: {dest_path}")
         print("Planned Desktop Entry Content:")
         print("-----------------------------------------------------------")
         print(content.strip())
         print("-----------------------------------------------------------")
     else:
+        if icon_source and planned_icon:
+            shutil.copy2(icon_source, planned_icon)
+
         os.makedirs(desktop_dir, exist_ok=True)
         with open(dest_path, "w") as f:
             f.write(content)
@@ -451,7 +548,7 @@ def main():
             create_symlink(recipe, target_dir, dry_run=dry_run)
 
             print("Integrating desktop file...")
-            update_desktop_entry(
+            install_desktop_file(
                 recipe, target_dir, dry_run=dry_run, active_dir=active_dir
             )
 
