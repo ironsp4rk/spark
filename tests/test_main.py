@@ -377,6 +377,47 @@ class TestSparkInstaller(unittest.TestCase):
         with self.assertRaises(SystemExit):
             main.load_recipe("myrecipe")
 
+    @patch("spark.main.get_remote_version")
+    @patch("spark.main.get_local_version")
+    @patch("spark.main.download_file")
+    @patch("spark.main.extract_archive")
+    @patch("spark.main.load_recipe")
+    @patch("builtins.open", new_callable=mock_open)
+    def test_main_dry_run(
+        self,
+        mock_file,
+        mock_load_recipe,
+        mock_extract,
+        mock_download,
+        mock_local_version,
+        mock_remote_version,
+    ):
+        mock_remote_version.return_value = "2.0.4"
+        mock_local_version.return_value = ""
+        mock_load_recipe.return_value = {
+            "package": {"name": "dry-app", "bin_name": "drybin"},
+            "version": {"url": "url", "pattern": "pat"},
+            "download": {
+                "url": "http://example.com/{version}.tar.gz",
+                "format": "tar.gz",
+            },
+            "install": {
+                "target_dir": "/opt/dry",
+                "executable_path": "dry_exe",
+            },
+            "integration": {
+                "desktop_file": "dry.desktop",
+            },
+        }
+
+        with patch("sys.argv", ["spark", "install", "dry-app", "--dry-run"]):
+            with self.assertRaises(SystemExit) as cm:
+                main.main()
+            self.assertEqual(cm.exception.code, 0)
+
+        self.assertTrue(mock_download.called)
+        self.assertTrue(mock_extract.called)
+
 
 if __name__ == "__main__":
     unittest.main()

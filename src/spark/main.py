@@ -203,24 +203,45 @@ def extract_archive(
                     break
             src_dir = current
 
+        # Calculate package stats
+        file_count = 0
+        total_size = 0
+        for root, _, files in os.walk(src_dir):
+            for f in files:
+                file_count += 1
+                file_path = os.path.join(root, f)
+                try:
+                    total_size += os.path.getsize(file_path)
+                except OSError:
+                    pass
+
+        size_mb = total_size / (1024 * 1024)
+        print(f"Extracted {file_count} files ({size_mb:.2f} MB)")
+
         shutil.move(src_dir, target_dir)
 
 
-def make_executable(recipe: Dict[str, Any], target_dir: str):
+def make_executable(recipe: Dict[str, Any], target_dir: str, dry_run: bool = False):
     executable_path = recipe.get("install", {}).get("executable_path", "")
     if executable_path:
         bin_path = os.path.join(target_dir, executable_path)
-        if os.path.exists(bin_path):
-            os.chmod(bin_path, 0o755)
+        if dry_run:
+            print(f"[Dry-run] Would make executable: {bin_path}")
+        else:
+            if os.path.exists(bin_path):
+                os.chmod(bin_path, 0o755)
 
     additional_executables = recipe.get("install", {}).get("additional_executables", [])
     for extra_exe in additional_executables:
         extra_path = os.path.join(target_dir, extra_exe)
-        if os.path.exists(extra_path):
-            os.chmod(extra_path, 0o755)
+        if dry_run:
+            print(f"[Dry-run] Would make executable: {extra_path}")
+        else:
+            if os.path.exists(extra_path):
+                os.chmod(extra_path, 0o755)
 
 
-def create_symlink(recipe: Dict[str, Any], target_dir: str):
+def create_symlink(recipe: Dict[str, Any], target_dir: str, dry_run: bool = False):
     bin_name = recipe.get("package", {}).get("bin_name")
     if not bin_name:
         return
@@ -228,25 +249,32 @@ def create_symlink(recipe: Dict[str, Any], target_dir: str):
     bin_dir = os.path.expanduser(
         recipe.get("install", {}).get("bin_dir", "~/.local/bin")
     )
-    os.makedirs(bin_dir, exist_ok=True)
     symlink_path = os.path.join(bin_dir, bin_name)
 
     executable_path = recipe.get("install", {}).get("executable_path", "")
     target_exec = os.path.join(target_dir, executable_path)
 
-    if os.path.exists(symlink_path) or os.path.islink(symlink_path):
-        os.remove(symlink_path)
+    if dry_run:
+        print(f"[Dry-run] Would create directory: {bin_dir}")
+        print(f"[Dry-run] Would remove existing symlink: {symlink_path}")
+        print(f"[Dry-run] Would create symlink: {symlink_path} -> {target_exec}")
+    else:
+        os.makedirs(bin_dir, exist_ok=True)
+        if os.path.exists(symlink_path) or os.path.islink(symlink_path):
+            os.remove(symlink_path)
+        os.symlink(target_exec, symlink_path)
 
-    os.symlink(target_exec, symlink_path)
 
-
-def update_desktop_entry(recipe: Dict[str, Any], target_dir: str):
+def update_desktop_entry(
+    recipe: Dict[str, Any], target_dir: str, dry_run: bool = False, active_dir: str = ""
+):
     integration = recipe.get("integration", {})
     desktop_file = integration.get("desktop_file")
     if not desktop_file:
         return
 
-    src_desktop = os.path.join(target_dir, desktop_file)
+    check_dir = active_dir if active_dir else target_dir
+    src_desktop = os.path.join(check_dir, desktop_file)
     if not os.path.exists(src_desktop):
         print(
             f"Warning: {desktop_file} not found in extracted files.",
@@ -279,16 +307,24 @@ def update_desktop_entry(recipe: Dict[str, Any], target_dir: str):
         )
 
     desktop_dir = os.path.expanduser("~/.local/share/applications")
-    os.makedirs(desktop_dir, exist_ok=True)
     dest_path = os.path.join(desktop_dir, os.path.basename(desktop_file))
 
-    with open(dest_path, "w") as f:
-        f.write(content)
+    if dry_run:
+        print(f"[Dry-run] Would create directory: {desktop_dir}")
+        print(f"[Dry-run] Would create/update desktop entry: {dest_path}")
+        print("Planned Desktop Entry Content:")
+        print("-----------------------------------------------------------")
+        print(content.strip())
+        print("-----------------------------------------------------------")
+    else:
+        os.makedirs(desktop_dir, exist_ok=True)
+        with open(dest_path, "w") as f:
+            f.write(content)
 
-    try:
-        subprocess.run(["update-desktop-database", desktop_dir], check=True)
-    except Exception as e:
-        print(f"Warning: Failed to update desktop database: {e}", file=sys.stderr)
+        try:
+            subprocess.run(["update-desktop-database", desktop_dir], check=True)
+        except Exception as e:
+            print(f"Warning: Failed to update desktop database: {e}", file=sys.stderr)
 
 
 def main():
@@ -304,13 +340,23 @@ def main():
     install_parser.add_argument(
         "-f", "--force", action="store_true", help="Force update/re-install"
     )
+    install_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print installation plan without making changes",
+    )
 
     args = parser.parse_args()
 
     if args.command == "install":
         recipe = load_recipe(args.recipe)
         name = recipe.get("package", {}).get("name", "Unknown")
-        print(f"Installing {name}...")
+        dry_run = getattr(args, "dry_run", False)
+
+        if dry_run:
+            print(f"Executing dry-run for {name}...")
+        else:
+            print(f"Installing {name}...")
 
         remote_version = get_remote_version(recipe)
         local_version = get_local_version(recipe)
@@ -328,7 +374,7 @@ def main():
             print(f"Updating/Installing {name} to version {remote_version}...")
 
         executable_path = recipe.get("install", {}).get("executable_path", "")
-        if executable_path:
+        if executable_path and not dry_run:
             ensure_not_running(os.path.basename(executable_path))
 
         download_url_template = recipe.get("download", {}).get("url", "")
@@ -385,20 +431,33 @@ def main():
 
             strip_components = recipe.get("install", {}).get("strip_components", 0)
 
+            if dry_run:
+                active_dir = os.path.join(tempdir, "extracted_dry_run")
+            else:
+                active_dir = target_dir
+
             print("Extracting package...")
+            if dry_run:
+                print(f"[Dry-run] Would extract to: {target_dir}")
             extract_archive(
                 archive_path,
                 download_format or "",
-                target_dir,
+                active_dir,
                 strip_components,
             )
 
-            make_executable(recipe, target_dir)
+            make_executable(recipe, target_dir, dry_run=dry_run)
 
-            create_symlink(recipe, target_dir)
+            create_symlink(recipe, target_dir, dry_run=dry_run)
 
             print("Integrating desktop file...")
-            update_desktop_entry(recipe, target_dir)
+            update_desktop_entry(
+                recipe, target_dir, dry_run=dry_run, active_dir=active_dir
+            )
+
+            if dry_run:
+                print("[Dry-run] Complete. No files were modified.")
+                sys.exit(0)
 
         print(
             f"{name} has been successfully installed/updated to version {remote_version}!"
