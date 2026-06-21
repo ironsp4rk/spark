@@ -460,9 +460,9 @@ def generate_new_desktop_file(
 
 
 def patch_existing_desktop_file(
-    recipe: Dict[str, Any], target_dir: str, icon_path: str, desktop_file: str
+    recipe: Dict[str, Any], read_dir: str, planned_target_dir: str, icon_path: str, desktop_file: str
 ) -> str:
-    src_desktop = os.path.join(target_dir, desktop_file)
+    src_desktop = os.path.join(read_dir, desktop_file)
     if not os.path.exists(src_desktop):
         print(
             f"Warning: {desktop_file} not found in extracted files.",
@@ -474,7 +474,7 @@ def patch_existing_desktop_file(
         content = f.read()
 
     executable_path = recipe.get("install", {}).get("executable_path", "")
-    new_exec = os.path.join(target_dir, executable_path)
+    new_exec = os.path.join(planned_target_dir, executable_path)
 
     escaped_exe = re.escape(os.path.basename(executable_path))
     content = re.sub(
@@ -521,7 +521,7 @@ def install_desktop_file(
         content = generate_new_desktop_file(recipe, target_dir, planned_icon)
     else:
         content = patch_existing_desktop_file(
-            recipe, check_dir, planned_icon, desktop_file
+            recipe, check_dir, target_dir, planned_icon, desktop_file
         )
         if not content:
             return

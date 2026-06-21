@@ -647,7 +647,7 @@ class TestSparkInstaller(unittest.TestCase):
         mock_exists.return_value = True
         recipe = {"install": {"executable_path": "bin/app"}}
         content = main.patch_existing_desktop_file(
-            recipe, "/opt/new", "/new/icon.png", "app.desktop"
+            recipe, "/tmp/extract", "/opt/new", "/new/icon.png", "app.desktop"
         )
 
         self.assertIn("Exec=/opt/new/bin/app --arg", content)
