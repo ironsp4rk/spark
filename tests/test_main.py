@@ -553,6 +553,206 @@ class TestSparkInstaller(unittest.TestCase):
         self.assertTrue(mock_download.called)
         self.assertTrue(mock_extract.called)
 
+    def test_extract_archive_strip_components(self):
+        import tarfile
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = os.path.join(temp_dir, "test.tar.gz")
+            extract_dir = os.path.join(temp_dir, "extracted")
+
+            os.makedirs(
+                os.path.join(temp_dir, "source", "wrapper_dir", "actual_app", "bin")
+            )
+            with open(
+                os.path.join(
+                    temp_dir, "source", "wrapper_dir", "actual_app", "bin", "executable"
+                ),
+                "w",
+            ) as f:
+                f.write("test")
+
+            with tarfile.open(archive_path, "w:gz") as tar:
+                tar.add(
+                    os.path.join(temp_dir, "source", "wrapper_dir"),
+                    arcname="wrapper_dir",
+                )
+
+            main.extract_archive(
+                archive_path, "tar.gz", extract_dir, strip_components=2
+            )
+
+            self.assertTrue(
+                os.path.exists(os.path.join(extract_dir, "bin", "executable"))
+            )
+
+    @patch("urllib.request.urlopen")
+    @patch("shutil.copyfileobj")
+    @patch("builtins.open", new_callable=mock_open)
+    def test_download_file_success(self, mock_file, mock_copy, mock_urlopen):
+        mock_response = MagicMock()
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        main.download_file("http://example.com/file", "/dest/file")
+        mock_urlopen.assert_called_once()
+        mock_copy.assert_called_once_with(mock_response, mock_file())
+
+    @patch("urllib.request.urlopen")
+    def test_download_file_error(self, mock_urlopen):
+        mock_urlopen.side_effect = Exception("Network error")
+        with self.assertRaises(SystemExit) as cm:
+            main.download_file("http://example.com/file", "/dest/file")
+        self.assertEqual(cm.exception.code, 1)
+
+    @patch("os.path.exists")
+    @patch("builtins.open", new_callable=mock_open, read_data="app-version=4.5.6\n")
+    def test_get_local_version_file_strategy(self, mock_file, mock_exists):
+        mock_exists.return_value = True
+        recipe = {
+            "install": {"target_dir": "/opt/app"},
+            "version": {
+                "local_strategy": "file",
+                "local_file": "version.txt",
+                "pattern": r"app-version=([\d\.]+)",
+            },
+        }
+        version = main.get_local_version(recipe)
+        self.assertEqual(version, "4.5.6")
+        mock_file.assert_called_once_with("/opt/app/version.txt", "r")
+
+    @patch("os.path.exists")
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=(
+            "[Desktop Entry]\n"
+            "Name=Test App\n"
+            "Exec=/old/path/app --arg\n"
+            "Icon=/old/icon.png\n"
+            "Terminal=false\n"
+        ),
+    )
+    def test_patch_existing_desktop_file(self, mock_file, mock_exists):
+        mock_exists.return_value = True
+        recipe = {"install": {"executable_path": "bin/app"}}
+        content = main.patch_existing_desktop_file(
+            recipe, "/opt/new", "/new/icon.png", "app.desktop"
+        )
+
+        self.assertIn("Exec=/opt/new/bin/app --arg", content)
+        self.assertIn("Icon=/new/icon.png", content)
+        self.assertIn("Name=Test App", content)
+        self.assertNotIn("/old/path/app", content)
+        self.assertNotIn("/old/icon.png", content)
+
+    @patch("os.path.exists")
+    @patch("os.path.expanduser")
+    def test_resolve_icon_path(self, mock_expanduser, mock_exists):
+        mock_expanduser.side_effect = lambda x: x
+
+        recipe = {"integration": {"icon": "/absolute/icon.png"}}
+        path, src = main.resolve_icon_path(recipe, "/opt/app")
+        self.assertEqual(path, "/absolute/icon.png")
+        self.assertEqual(src, "")
+
+        recipe = {"integration": {"icon": "icon.png"}}
+        mock_exists.side_effect = lambda p: p == "/opt/app/icon.png"
+        path, src = main.resolve_icon_path(recipe, "/opt/app")
+        self.assertEqual(path, "/opt/app/icon.png")
+        self.assertEqual(src, "")
+
+        recipe = {"integration": {"icon": "icon.png"}, "_recipe_dir": "/recipes"}
+        mock_exists.side_effect = lambda p: p == "/recipes/icon.png"
+        path, src = main.resolve_icon_path(recipe, "/opt/app")
+        self.assertEqual(path, "/opt/app/icon.png")
+        self.assertEqual(src, "/recipes/icon.png")
+
+    def test_get_remote_version_missing_url(self):
+        recipe = {"version": {"pattern": ".*"}}
+        with self.assertRaises(SystemExit) as cm:
+            main.get_remote_version(recipe)
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_get_remote_version_missing_pattern(self):
+        recipe = {"version": {"url": "http://example.com"}}
+        with self.assertRaises(SystemExit) as cm:
+            main.get_remote_version(recipe)
+        self.assertEqual(cm.exception.code, 1)
+
+    @patch("urllib.request.urlopen")
+    def test_get_remote_version_http_error(self, mock_urlopen):
+        mock_urlopen.side_effect = Exception("HTTP 404")
+        recipe = {"version": {"url": "http://example.com", "pattern": ".*"}}
+        with self.assertRaises(SystemExit) as cm:
+            main.get_remote_version(recipe)
+        self.assertEqual(cm.exception.code, 1)
+
+    @patch("urllib.request.urlopen")
+    def test_get_remote_version_no_match(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.headers.get_content_charset.return_value = "utf-8"
+        mock_response.read.return_value = b"<html><p>No version here</p></html>"
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        recipe = {"version": {"url": "http://example.com", "pattern": r"Version (\d+)"}}
+        with self.assertRaises(SystemExit) as cm:
+            main.get_remote_version(recipe)
+        self.assertEqual(cm.exception.code, 1)
+
+    @patch("urllib.request.urlopen")
+    def test_get_remote_version_js_not_found(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.headers.get_content_charset.return_value = "utf-8"
+        mock_response.read.return_value = b"<html><body>No scripts</body></html>"
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        recipe = {
+            "version": {
+                "url": "http://example.com",
+                "search_linked_js": True,
+                "pattern": ".*",
+            }
+        }
+        with self.assertRaises(SystemExit) as cm:
+            main.get_remote_version(recipe)
+        self.assertEqual(cm.exception.code, 1)
+
+    @patch("spark.main.get_remote_version")
+    @patch("spark.main.get_local_version")
+    @patch("spark.main.download_file")
+    @patch("spark.main.extract_archive")
+    @patch("spark.main.make_executable")
+    @patch("spark.main.create_symlink")
+    @patch("spark.main.install_desktop_file")
+    @patch("spark.main.ensure_not_running")
+    @patch("spark.main.load_recipe")
+    def test_main_match_pattern_comparison(
+        self,
+        mock_load_recipe,
+        mock_ensure_not_running,
+        mock_install_desktop,
+        mock_create_symlink,
+        mock_make_executable,
+        mock_extract,
+        mock_download,
+        mock_local_version,
+        mock_remote_version,
+    ):
+        mock_remote_version.return_value = "Release 2.5"
+        mock_local_version.return_value = "v2.5"
+
+        mock_load_recipe.return_value = {
+            "package": {"name": "app"},
+            "version": {"url": "url", "pattern": "pat", "match_pattern": r"(\d+\.\d+)"},
+            "install": {"target_dir": "dir"},
+        }
+
+        with patch("sys.argv", ["spark", "install", "app"]):
+            with self.assertRaises(SystemExit) as cm:
+                main.main()
+            self.assertEqual(cm.exception.code, 0)
+
+        mock_download.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
