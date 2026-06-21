@@ -16,6 +16,23 @@ LOCAL_RECIPES_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "config", "spark", "recipes")
 )
 GLOBAL_RECIPES_DIR = "~/.config/spark/recipes"
+SPARK_OPT_ROOT = os.path.expanduser("~/.local/opt")
+MANIFEST_FILENAME = ".spark-manifest.toml"
+
+
+def get_target_dir(recipe: Dict[str, Any]) -> str:
+    dir_name = recipe.get("install", {}).get("dir_name")
+    if not dir_name:
+        dir_name = recipe.get("package", {}).get("name")
+    if not dir_name:
+        print(
+            "Error: Could not determine directory name for installation.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    dir_name = dir_name.replace("/", "-").replace("\\", "-")
+    return os.path.join(SPARK_OPT_ROOT, dir_name)
 
 
 def load_recipe(recipe_path_or_name: str) -> Dict[str, Any]:
@@ -88,7 +105,7 @@ def get_remote_pattern(recipe: Dict[str, Any]) -> str:
 def get_local_version(recipe: Dict[str, Any]) -> str:
     cli_name = recipe.get("package", {}).get("cli_name")
     executable_path = recipe.get("install", {}).get("executable_path")
-    target_dir = os.path.expanduser(recipe.get("install", {}).get("target_dir", ""))
+    target_dir = get_target_dir(recipe)
     bin_dir = os.path.expanduser(
         recipe.get("install", {}).get("bin_dir", "~/.local/bin")
     )
@@ -590,6 +607,178 @@ def update_repositories():
         print("Finished updating recipe repositories.")
 
 
+def process_install(recipe_arg: str, dry_run: bool, force: bool):
+    recipe = load_recipe(recipe_arg)
+    name = recipe.get("package", {}).get("name", "Unknown")
+
+    if dry_run:
+        print(f"Executing dry-run for {name}...")
+    else:
+        print(f"Installing {name}...")
+
+    remote_version = get_remote_version(recipe)
+    local_version = get_local_version(recipe)
+
+    match_pattern = recipe.get("version", {}).get("match_pattern")
+    if match_pattern:
+        rm = re.search(match_pattern, remote_version)
+        remote_cmp = rm.group(1) if rm else remote_version
+
+        lm = re.search(match_pattern, local_version)
+        local_cmp = lm.group(1) if lm else local_version
+    else:
+        remote_cmp = remote_version
+        local_cmp = local_version
+
+    print(f"Latest Version: {remote_version}")
+    print(f"Local Version:  {local_version if local_version else 'Not installed'}")
+
+    if local_cmp == remote_cmp and not force:
+        print(f"{name} is already installed and up to date.\n")
+        return
+
+    if force and local_cmp == remote_cmp:
+        print(f"Force updating/re-installing {name} version {remote_version}...")
+    else:
+        print(f"Updating/Installing {name} to version {remote_version}...")
+
+    executable_path = recipe.get("install", {}).get("executable_path", "")
+    if executable_path and not dry_run:
+        ensure_not_running(os.path.basename(executable_path))
+
+    download_url_template = recipe.get("download", {}).get("url", "")
+    if not download_url_template:
+        print("Error: download url not defined in recipe.", file=sys.stderr)
+        sys.exit(1)
+    download_url = download_url_template.replace("{version}", remote_version)
+
+    download_format = recipe.get("download", {}).get("format", "")
+    if not download_format:
+        if download_url.endswith(".zip"):
+            download_format = "zip"
+        else:
+            download_format = "tar"
+
+    verify_config = recipe.get("download", {}).get("verify", {})
+    verify_type = verify_config.get("type")
+
+    with tempfile.TemporaryDirectory() as tempdir:
+        archive_filename = (
+            f"package_{remote_version}.{download_format}"
+            if download_format
+            else "package"
+        )
+        archive_path = os.path.join(tempdir, archive_filename)
+
+        print("Downloading package...")
+        download_file(download_url, archive_path)
+
+        if verify_type == "gpg":
+            sig_url_template = verify_config.get("signature_url", "")
+            pubkey_url = verify_config.get("pubkey_url", "")
+            if sig_url_template and pubkey_url:
+                sig_url = sig_url_template.replace("{version}", remote_version)
+                sig_path = archive_path + ".asc"
+                pubkey_path = os.path.join(tempdir, "pubkey.gpg")
+
+                print("Downloading GPG signature and public key...")
+                download_file(sig_url, sig_path)
+                download_file(pubkey_url, pubkey_path)
+
+                print("Verifying signature...")
+                verify_gpg(archive_path, sig_path, pubkey_path, tempdir)
+
+        target_dir = get_target_dir(recipe)
+
+        strip_components = recipe.get("install", {}).get("strip_components", 0)
+
+        if dry_run:
+            active_dir = os.path.join(tempdir, "extracted_dry_run")
+        else:
+            active_dir = target_dir
+
+        print("Extracting package...")
+        if dry_run:
+            print(f"[Dry-run] Would extract to: {target_dir}")
+        extract_archive(
+            archive_path,
+            download_format or "",
+            active_dir,
+            strip_components,
+        )
+
+        make_executable(recipe, target_dir, dry_run=dry_run)
+
+        create_symlink(recipe, target_dir, dry_run=dry_run)
+
+        print("Integrating desktop file...")
+        install_desktop_file(recipe, target_dir, dry_run=dry_run, active_dir=active_dir)
+
+        manifest_content = (
+            f'package_name = "{name}"\n'
+            f'recipe_name = "{recipe_arg}"\n'
+            f'version = "{remote_version}"\n'
+        )
+
+        if dry_run:
+            print("[Dry-run] Would create manifest with content:")
+            print("-----------------------------------------------------------")
+            print(manifest_content.strip())
+            print("-----------------------------------------------------------")
+            print("[Dry-run] Complete. No files were modified.\n")
+            return
+        else:
+            os.makedirs(target_dir, exist_ok=True)
+            manifest_path = os.path.join(target_dir, MANIFEST_FILENAME)
+            with open(manifest_path, "w") as f:
+                f.write(manifest_content)
+
+    print(
+        f"{name} has been successfully installed/updated to version {remote_version}!\n"
+    )
+
+
+def process_upgrade(app: str | None, dry_run: bool):
+    if app:
+        process_install(app, dry_run, False)
+        return
+
+    if not os.path.exists(SPARK_OPT_ROOT):
+        print("No packages installed via spark.")
+        return
+
+    manifests = []
+    for item in os.listdir(SPARK_OPT_ROOT):
+        item_path = os.path.join(SPARK_OPT_ROOT, item)
+        if os.path.isdir(item_path):
+            manifest_file = os.path.join(item_path, MANIFEST_FILENAME)
+            if os.path.exists(manifest_file):
+                try:
+                    with open(manifest_file, "rb") as f:
+                        manifest = tomllib.load(f)
+                        manifests.append((item, manifest))
+                except Exception as e:
+                    print(
+                        f"Warning: Could not read manifest at {manifest_file}: {e}",
+                        file=sys.stderr,
+                    )
+
+    if not manifests:
+        print("No packages with spark manifests found.")
+        return
+
+    for item, manifest in manifests:
+        recipe_name = manifest.get("recipe_name")
+        pkg_name = manifest.get("package_name", item)
+
+        if not recipe_name:
+            print(f"Skipping {pkg_name}: missing recipe_name in manifest.")
+            continue
+
+        print(f"--- Checking for updates for {pkg_name} ---")
+        process_install(recipe_name, dry_run, False)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="S.P.A.R.K. (Standalone Package Acquisition & Resolution Kit) - A custom package manager designed to acquire, extract, and integrate pre-compiled application binaries from arbitrary web sources into user-space."
@@ -611,6 +800,16 @@ def main():
         help="Print installation plan without making changes",
     )
 
+    upgrade_parser = subparsers.add_parser("upgrade", help="Upgrade installed packages")
+    upgrade_parser.add_argument(
+        "app", nargs="?", help="Specific app to upgrade (optional)"
+    )
+    upgrade_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print upgrade plan without making changes",
+    )
+
     args = parser.parse_args()
 
     if args.command == "update":
@@ -618,130 +817,14 @@ def main():
         sys.exit(0)
 
     if args.command == "install":
-        recipe = load_recipe(args.recipe)
-        name = recipe.get("package", {}).get("name", "Unknown")
-        dry_run = getattr(args, "dry_run", False)
-
-        if dry_run:
-            print(f"Executing dry-run for {name}...")
-        else:
-            print(f"Installing {name}...")
-
-        remote_version = get_remote_version(recipe)
-        local_version = get_local_version(recipe)
-
-        match_pattern = recipe.get("version", {}).get("match_pattern")
-        if match_pattern:
-            rm = re.search(match_pattern, remote_version)
-            remote_cmp = rm.group(1) if rm else remote_version
-
-            lm = re.search(match_pattern, local_version)
-            local_cmp = lm.group(1) if lm else local_version
-        else:
-            remote_cmp = remote_version
-            local_cmp = local_version
-
-        print(f"Latest Version: {remote_version}")
-        print(f"Local Version:  {local_version if local_version else 'Not installed'}")
-
-        if local_cmp == remote_cmp and not args.force:
-            print(f"{name} is already installed and up to date.")
-            sys.exit(0)
-
-        if args.force and local_cmp == remote_cmp:
-            print(f"Force updating/re-installing {name} version {remote_version}...")
-        else:
-            print(f"Updating/Installing {name} to version {remote_version}...")
-
-        executable_path = recipe.get("install", {}).get("executable_path", "")
-        if executable_path and not dry_run:
-            ensure_not_running(os.path.basename(executable_path))
-
-        download_url_template = recipe.get("download", {}).get("url", "")
-        if not download_url_template:
-            print("Error: download url not defined in recipe.", file=sys.stderr)
-            sys.exit(1)
-        download_url = download_url_template.replace("{version}", remote_version)
-
-        download_format = recipe.get("download", {}).get("format", "")
-        if not download_format:
-            if download_url.endswith(".zip"):
-                download_format = "zip"
-            else:
-                download_format = "tar"
-
-        verify_config = recipe.get("download", {}).get("verify", {})
-        verify_type = verify_config.get("type")
-
-        with tempfile.TemporaryDirectory() as tempdir:
-            archive_filename = (
-                f"package_{remote_version}.{download_format}"
-                if download_format
-                else "package"
-            )
-            archive_path = os.path.join(tempdir, archive_filename)
-
-            print("Downloading package...")
-            download_file(download_url, archive_path)
-
-            if verify_type == "gpg":
-                sig_url_template = verify_config.get("signature_url", "")
-                pubkey_url = verify_config.get("pubkey_url", "")
-                if sig_url_template and pubkey_url:
-                    sig_url = sig_url_template.replace("{version}", remote_version)
-                    sig_path = archive_path + ".asc"
-                    pubkey_path = os.path.join(tempdir, "pubkey.gpg")
-
-                    print("Downloading GPG signature and public key...")
-                    download_file(sig_url, sig_path)
-                    download_file(pubkey_url, pubkey_path)
-
-                    print("Verifying signature...")
-                    verify_gpg(archive_path, sig_path, pubkey_path, tempdir)
-
-            target_dir = os.path.expanduser(
-                recipe.get("install", {}).get("target_dir", "")
-            )
-            if not target_dir:
-                print(
-                    "Error: install target_dir not defined in recipe.",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-
-            strip_components = recipe.get("install", {}).get("strip_components", 0)
-
-            if dry_run:
-                active_dir = os.path.join(tempdir, "extracted_dry_run")
-            else:
-                active_dir = target_dir
-
-            print("Extracting package...")
-            if dry_run:
-                print(f"[Dry-run] Would extract to: {target_dir}")
-            extract_archive(
-                archive_path,
-                download_format or "",
-                active_dir,
-                strip_components,
-            )
-
-            make_executable(recipe, target_dir, dry_run=dry_run)
-
-            create_symlink(recipe, target_dir, dry_run=dry_run)
-
-            print("Integrating desktop file...")
-            install_desktop_file(
-                recipe, target_dir, dry_run=dry_run, active_dir=active_dir
-            )
-
-            if dry_run:
-                print("[Dry-run] Complete. No files were modified.")
-                sys.exit(0)
-
-        print(
-            f"{name} has been successfully installed/updated to version {remote_version}!"
+        process_install(
+            args.recipe, getattr(args, "dry_run", False), getattr(args, "force", False)
         )
+        sys.exit(0)
+
+    if args.command == "upgrade":
+        process_upgrade(args.app, getattr(args, "dry_run", False))
+        sys.exit(0)
 
 
 if __name__ == "__main__":

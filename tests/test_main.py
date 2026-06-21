@@ -85,9 +85,9 @@ class TestSparkInstaller(unittest.TestCase):
         mock_run.return_value = mock_proc
 
         recipe = {
-            "package": {"cli_name": "fakebin"},
+            "package": {"cli_name": "fakebin", "name": "fake_app"},
             "install": {
-                "target_dir": "~/.local/opt/fake_app",
+                "dir_name": "fake_app",
                 "executable_path": "fake_app",
             },
             "version": {"pattern": r"Version\s+(\d+\.\d+\.\d+)"},
@@ -106,9 +106,9 @@ class TestSparkInstaller(unittest.TestCase):
         mock_run.return_value = mock_proc
 
         recipe = {
-            "package": {"cli_name": "fakebin"},
+            "package": {"cli_name": "fakebin", "name": "fake_app"},
             "install": {
-                "target_dir": "~/.local/opt/fake_app",
+                "dir_name": "fake_app",
                 "executable_path": "fake_app",
             },
             "version": {
@@ -124,9 +124,9 @@ class TestSparkInstaller(unittest.TestCase):
     def test_get_local_version_not_installed(self, mock_exists):
         mock_exists.return_value = False
         recipe = {
-            "package": {"cli_name": "fakebin"},
+            "package": {"cli_name": "fakebin", "name": "fake_app"},
             "install": {
-                "target_dir": "~/.local/opt/fake_app",
+                "dir_name": "fake_app",
                 "executable_path": "fake_app",
             },
             "version": {"pattern": r"Version\s+(\d+\.\d+\.\d+)"},
@@ -238,8 +238,12 @@ class TestSparkInstaller(unittest.TestCase):
     @patch("spark.main.install_desktop_file")
     @patch("spark.main.ensure_not_running")
     @patch("spark.main.load_recipe")
+    @patch("os.makedirs")
+    @patch("builtins.open", new_callable=mock_open)
     def test_main_force_already_up_to_date(
         self,
+        mock_file_open,
+        mock_makedirs,
         mock_load_recipe,
         mock_ensure_not_running,
         mock_update_desktop,
@@ -264,7 +268,9 @@ class TestSparkInstaller(unittest.TestCase):
         }
 
         with patch("sys.argv", ["spark", "install", "fake-app", "--force"]):
-            main.main()
+            with self.assertRaises(SystemExit) as cm:
+                main.main()
+            self.assertEqual(cm.exception.code, 0)
 
         self.assertTrue(mock_download.called)
         mock_ensure_not_running.assert_called_once()
@@ -612,7 +618,8 @@ class TestSparkInstaller(unittest.TestCase):
     def test_get_local_version_file_strategy(self, mock_file, mock_exists):
         mock_exists.return_value = True
         recipe = {
-            "install": {"target_dir": "/opt/app"},
+            "package": {"name": "app"},
+            "install": {"dir_name": "app"},
             "version": {
                 "local_strategy": "file",
                 "local_file": "version.txt",
@@ -621,7 +628,8 @@ class TestSparkInstaller(unittest.TestCase):
         }
         version = main.get_local_version(recipe)
         self.assertEqual(version, "4.5.6")
-        mock_file.assert_called_once_with("/opt/app/version.txt", "r")
+        expected_path = os.path.join(main.SPARK_OPT_ROOT, "app", "version.txt")
+        mock_file.assert_called_once_with(expected_path, "r")
 
     @patch("os.path.exists")
     @patch(
