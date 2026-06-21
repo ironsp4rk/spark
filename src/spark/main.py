@@ -11,6 +11,12 @@ import urllib.request
 import urllib.parse
 from typing import Any, Dict
 
+CORE_REPO_URL = "https://github.com/ironsp4rk/spark-recipes"
+LOCAL_RECIPES_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "config", "spark", "recipes")
+)
+GLOBAL_RECIPES_DIR = "~/.config/spark/recipes"
+
 
 def load_recipe(recipe_path_or_name: str) -> Dict[str, Any]:
     resolved_path = os.path.expanduser(recipe_path_or_name)
@@ -18,8 +24,8 @@ def load_recipe(recipe_path_or_name: str) -> Dict[str, Any]:
         path = os.path.abspath(resolved_path)
     else:
         search_dirs = [
-            os.path.abspath("./config/spark/recipes"),
-            os.path.expanduser("~/.config/spark/recipes"),
+            os.path.abspath(LOCAL_RECIPES_DIR),
+            os.path.expanduser(GLOBAL_RECIPES_DIR),
         ]
 
         path = ""
@@ -47,7 +53,7 @@ def load_recipe(recipe_path_or_name: str) -> Dict[str, Any]:
         if not path:
             # Fallback for error message
             path = os.path.expanduser(
-                f"~/.config/spark/recipes/{recipe_path_or_name}.toml"
+                os.path.join(GLOBAL_RECIPES_DIR, f"{recipe_path_or_name}.toml")
             )
 
     if not os.path.exists(path):
@@ -529,11 +535,68 @@ def install_desktop_file(
             print(f"Warning: Failed to update desktop database: {e}", file=sys.stderr)
 
 
+def update_repositories():
+    local_base_dir = os.path.abspath(LOCAL_RECIPES_DIR)
+    prod_base_dir = os.path.expanduser(GLOBAL_RECIPES_DIR)
+    search_dirs = [local_base_dir, prod_base_dir]
+
+    updated_any = False
+    core_repo_found = False
+
+    for base_dir in search_dirs:
+        if not os.path.exists(base_dir):
+            continue
+
+        for item in os.listdir(base_dir):
+            sub_dir = os.path.join(base_dir, item)
+            if os.path.isdir(sub_dir):
+                git_dir = os.path.join(sub_dir, ".git")
+                if os.path.exists(git_dir) and os.path.isdir(git_dir):
+                    if item == "core":
+                        core_repo_found = True
+                    print(f"Updating recipe repository: {sub_dir}")
+                    try:
+                        subprocess.run(["git", "-C", sub_dir, "pull"], check=True)
+                        updated_any = True
+                    except subprocess.CalledProcessError:
+                        print(
+                            f"Warning: Failed to update repository {sub_dir}",
+                            file=sys.stderr,
+                        )
+                    except Exception as e:
+                        print(
+                            f"Warning: Error updating repository {sub_dir}: {e}",
+                            file=sys.stderr,
+                        )
+
+    if not core_repo_found:
+        core_dir = os.path.join(prod_base_dir, "core")
+        print(f"Core repository not found. Cloning into {core_dir}...")
+        os.makedirs(prod_base_dir, exist_ok=True)
+        try:
+            subprocess.run(["git", "clone", CORE_REPO_URL, core_dir], check=True)
+            updated_any = True
+        except subprocess.CalledProcessError:
+            print(
+                f"Warning: Failed to clone core repository to {core_dir}",
+                file=sys.stderr,
+            )
+        except Exception as e:
+            print(f"Warning: Error cloning core repository: {e}", file=sys.stderr)
+
+    if not updated_any:
+        print("No recipe repositories found to update.")
+    else:
+        print("Finished updating recipe repositories.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="S.P.A.R.K. (Standalone Package Acquisition & Resolution Kit) - A custom package manager designed to acquire, extract, and integrate pre-compiled application binaries from arbitrary web sources into user-space."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser("update", help="Update all recipe repositories")
 
     install_parser = subparsers.add_parser(
         "install", help="Install or update a package recipe"
@@ -549,6 +612,10 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.command == "update":
+        update_repositories()
+        sys.exit(0)
 
     if args.command == "install":
         recipe = load_recipe(args.recipe)

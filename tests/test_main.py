@@ -757,6 +757,43 @@ class TestSparkInstaller(unittest.TestCase):
 
         mock_download.assert_not_called()
 
+    @patch("spark.main.update_repositories")
+    def test_main_update(self, mock_update_repositories):
+        with patch("sys.argv", ["spark", "update"]):
+            with self.assertRaises(SystemExit) as cm:
+                main.main()
+            self.assertEqual(cm.exception.code, 0)
+        mock_update_repositories.assert_called_once()
+
+    @patch("os.makedirs")
+    @patch("os.listdir")
+    @patch("os.path.isdir")
+    @patch("os.path.exists")
+    @patch("subprocess.run")
+    def test_update_repositories(
+        self, mock_run, mock_exists, mock_isdir, mock_listdir, mock_makedirs
+    ):
+        mock_exists.return_value = True
+        mock_isdir.return_value = True
+        mock_listdir.return_value = ["repo1"]
+
+        main.update_repositories()
+
+        self.assertEqual(mock_run.call_count, 3)
+        mock_run.assert_any_call(
+            ["git", "-C", os.path.abspath("./config/spark/recipes/repo1"), "pull"],
+            check=True,
+        )
+        mock_run.assert_any_call(
+            [
+                "git",
+                "clone",
+                main.CORE_REPO_URL,
+                os.path.expanduser("~/.config/spark/recipes/core"),
+            ],
+            check=True,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
