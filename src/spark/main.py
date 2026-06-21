@@ -42,43 +42,77 @@ def load_recipe(recipe_path_or_name: str) -> Dict[str, Any]:
         sys.exit(1)
 
 
+def get_local_pattern(recipe: Dict[str, Any]) -> str:
+    version_config = recipe.get("version", {})
+    return str(version_config.get("local_pattern") or version_config.get("pattern", ""))
+
+
+def get_remote_pattern(recipe: Dict[str, Any]) -> str:
+    version_config = recipe.get("version", {})
+    return str(
+        version_config.get("remote_pattern") or version_config.get("pattern", "")
+    )
+
+
 def get_local_version(recipe: Dict[str, Any]) -> str:
-    bin_name = recipe.get("package", {}).get("bin_name")
+    cli_name = recipe.get("package", {}).get("cli_name")
     executable_path = recipe.get("install", {}).get("executable_path")
     target_dir = os.path.expanduser(recipe.get("install", {}).get("target_dir", ""))
     bin_dir = os.path.expanduser(
         recipe.get("install", {}).get("bin_dir", "~/.local/bin")
     )
 
-    check_paths = []
-    if bin_name:
-        check_paths.append(os.path.join(bin_dir, bin_name))
-    if target_dir and executable_path:
-        check_paths.append(os.path.join(target_dir, executable_path))
+    version_config = recipe.get("version", {})
+    local_strategy = version_config.get("local_strategy", "cli")
 
-    for path in check_paths:
-        if os.path.exists(path):
-            try:
-                result = subprocess.run(
-                    [path, "--version"], capture_output=True, text=True, check=True
-                )
-                pattern = recipe.get("version", {}).get("local_pattern") or recipe.get(
-                    "version", {}
-                ).get("pattern", "")
-                if pattern:
-                    match = re.search(pattern, result.stdout)
-                    if match:
-                        return match.group(1)
-            except Exception:
-                pass
+    if local_strategy == "file":
+        local_file = version_config.get("local_file")
+        if local_file and target_dir:
+            local_file_path = os.path.join(target_dir, local_file)
+            if os.path.exists(local_file_path):
+                try:
+                    with open(local_file_path, "r") as f:
+                        content = f.read()
+                    pattern = get_local_pattern(recipe)
+                    if pattern:
+                        match = re.search(pattern, content)
+                        if match:
+                            return match.group(1)
+                except Exception:
+                    pass
+        return ""
+
+    if local_strategy == "cli":
+        check_paths = []
+        if cli_name:
+            check_paths.append(os.path.join(bin_dir, cli_name))
+        if target_dir and executable_path:
+            check_paths.append(os.path.join(target_dir, executable_path))
+
+        for path in check_paths:
+            if os.path.exists(path):
+                try:
+                    result = subprocess.run(
+                        [path, "--version"], capture_output=True, text=True, check=True
+                    )
+                    pattern = get_local_pattern(recipe)
+                    if pattern:
+                        match = re.search(pattern, result.stdout)
+                        if match:
+                            return match.group(1)
+                except Exception:
+                    pass
     return ""
 
 
 def get_remote_version(recipe: Dict[str, Any]) -> str:
     version_url = recipe.get("version", {}).get("url")
-    pattern = recipe.get("version", {}).get("pattern")
+    pattern = get_remote_pattern(recipe)
     if not version_url or not pattern:
-        print("Error: version url or pattern not defined in recipe.", file=sys.stderr)
+        print(
+            "Error: version url or remote_pattern not defined in recipe.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     search_linked_js = recipe.get("version", {}).get("search_linked_js", False)
@@ -289,14 +323,14 @@ def make_executable(recipe: Dict[str, Any], target_dir: str, dry_run: bool = Fal
 
 
 def create_symlink(recipe: Dict[str, Any], target_dir: str, dry_run: bool = False):
-    bin_name = recipe.get("package", {}).get("bin_name")
-    if not bin_name:
+    cli_name = recipe.get("package", {}).get("cli_name")
+    if not cli_name:
         return
 
     bin_dir = os.path.expanduser(
         recipe.get("install", {}).get("bin_dir", "~/.local/bin")
     )
-    symlink_path = os.path.join(bin_dir, bin_name)
+    symlink_path = os.path.join(bin_dir, cli_name)
 
     executable_path = recipe.get("install", {}).get("executable_path", "")
     target_exec = os.path.join(target_dir, executable_path)
@@ -504,14 +538,25 @@ def main():
         remote_version = get_remote_version(recipe)
         local_version = get_local_version(recipe)
 
+        match_pattern = recipe.get("version", {}).get("match_pattern")
+        if match_pattern:
+            rm = re.search(match_pattern, remote_version)
+            remote_cmp = rm.group(1) if rm else remote_version
+
+            lm = re.search(match_pattern, local_version)
+            local_cmp = lm.group(1) if lm else local_version
+        else:
+            remote_cmp = remote_version
+            local_cmp = local_version
+
         print(f"Latest Version: {remote_version}")
         print(f"Local Version:  {local_version if local_version else 'Not installed'}")
 
-        if local_version == remote_version and not args.force:
+        if local_cmp == remote_cmp and not args.force:
             print(f"{name} is already installed and up to date.")
             sys.exit(0)
 
-        if args.force and local_version == remote_version:
+        if args.force and local_cmp == remote_cmp:
             print(f"Force updating/re-installing {name} version {remote_version}...")
         else:
             print(f"Updating/Installing {name} to version {remote_version}...")

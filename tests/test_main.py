@@ -85,7 +85,7 @@ class TestSparkInstaller(unittest.TestCase):
         mock_run.return_value = mock_proc
 
         recipe = {
-            "package": {"bin_name": "fakebin"},
+            "package": {"cli_name": "fakebin"},
             "install": {
                 "target_dir": "~/.local/opt/fake_app",
                 "executable_path": "fake_app",
@@ -106,7 +106,7 @@ class TestSparkInstaller(unittest.TestCase):
         mock_run.return_value = mock_proc
 
         recipe = {
-            "package": {"bin_name": "fakebin"},
+            "package": {"cli_name": "fakebin"},
             "install": {
                 "target_dir": "~/.local/opt/fake_app",
                 "executable_path": "fake_app",
@@ -124,7 +124,7 @@ class TestSparkInstaller(unittest.TestCase):
     def test_get_local_version_not_installed(self, mock_exists):
         mock_exists.return_value = False
         recipe = {
-            "package": {"bin_name": "fakebin"},
+            "package": {"cli_name": "fakebin"},
             "install": {
                 "target_dir": "~/.local/opt/fake_app",
                 "executable_path": "fake_app",
@@ -337,7 +337,7 @@ class TestSparkInstaller(unittest.TestCase):
     ):
         mock_exists.return_value = True
         recipe = {
-            "package": {"bin_name": "fakebin_custom"},
+            "package": {"cli_name": "fakebin_custom"},
             "install": {
                 "executable_path": "fake_app",
                 "bin_dir": "/custom/bin",
@@ -530,7 +530,7 @@ class TestSparkInstaller(unittest.TestCase):
         mock_remote_version.return_value = "2.0.4"
         mock_local_version.return_value = ""
         mock_load_recipe.return_value = {
-            "package": {"name": "dry-app", "bin_name": "drybin"},
+            "package": {"name": "dry-app", "cli_name": "drybin"},
             "version": {"url": "url", "pattern": "pat"},
             "download": {
                 "url": "http://example.com/{version}.tar.gz",

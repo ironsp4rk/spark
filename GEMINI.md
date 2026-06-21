@@ -22,7 +22,7 @@
 ## Directory Structure
 * **Recipes:** `~/.config/spark/recipes/` (Contains the `.toml` files)
 * **Installations:** `~/.local/opt/<package_name>/` (Extracted application files)
-* **Executables:** `~/.local/bin/<bin_name>` (Symlinks pointing to the installation dir)
+* **Executables:** `~/.local/bin/<cli_name>` (Symlinks pointing to the installation dir)
 * **Desktop Integration:** `~/.local/share/applications/<package_name>.desktop`
 
 ## The Installation Pipeline
@@ -32,7 +32,7 @@ When executing a recipe, `spark` must perform the following sequence:
 2.  **Acquisition:** Download the target archive (tarball, zip) into a temporary directory, injecting the resolved version into the URL template.
 3.  **Verification (Optional):** If defined, download GPG signatures/public keys or checksums and verify the archive integrity before proceeding.
 4.  **Extraction:** Clear any existing directory at `target_dir`. Extract the archive into `target_dir`, stripping top-level components if specified. Ensure primary binaries have `0o755` permissions.
-5.  **Resolution (Linking):** Create a symlink from the `executable_path` to `~/.local/bin/<bin_name>`.
+5.  **Resolution (Linking):** Create a symlink from the `executable_path` to `~/.local/bin/<cli_name>`.
 6.  **Integration:** Locate the `.desktop` file or generate a new one if not provided. Rewrite `Exec=` and `Icon=` paths to point to absolute paths within `target_dir`. Copy the file to `~/.local/share/applications/` and execute `update-desktop-database ~/.local/share/applications`.
 
 ## Example 1: CLI Symlink and Embedded .desktop File
@@ -41,7 +41,7 @@ When executing a recipe, `spark` must perform the following sequence:
 [package]
 name = "sublime-text"
 description = "A sophisticated text editor for code, markup and prose."
-bin_name = "subl"
+cli_name = "subl"
 
 [version]
 strategy = "regex"
@@ -73,7 +73,7 @@ update_paths = true
 [package]
 name = "stellar-sync"
 description = "Visual cloud synchronization tool."
-# bin_name is intentionally omitted
+# cli_name is intentionally omitted
 
 [version]
 strategy = "regex"
