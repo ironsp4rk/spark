@@ -17,18 +17,43 @@ def load_recipe(recipe_path_or_name: str) -> Dict[str, Any]:
     if os.path.exists(resolved_path):
         path = os.path.abspath(resolved_path)
     else:
-        local_path = os.path.abspath(
-            f"./config/spark/recipes/{recipe_path_or_name}.toml"
-        )
-        if os.path.exists(local_path):
-            path = local_path
-        else:
+        search_dirs = [
+            os.path.abspath("./config/spark/recipes"),
+            os.path.expanduser("~/.config/spark/recipes"),
+        ]
+
+        path = ""
+        for base_dir in search_dirs:
+            if not os.path.exists(base_dir):
+                continue
+
+            # Check direct file
+            direct_path = os.path.join(base_dir, f"{recipe_path_or_name}.toml")
+            if os.path.exists(direct_path):
+                path = direct_path
+                break
+
+            # Check immediate subdirectories (for repositories)
+            for item in os.listdir(base_dir):
+                sub_dir = os.path.join(base_dir, item)
+                if os.path.isdir(sub_dir):
+                    sub_path = os.path.join(sub_dir, f"{recipe_path_or_name}.toml")
+                    if os.path.exists(sub_path):
+                        path = sub_path
+                        break
+            if path:
+                break
+
+        if not path:
+            # Fallback for error message
             path = os.path.expanduser(
                 f"~/.config/spark/recipes/{recipe_path_or_name}.toml"
             )
 
     if not os.path.exists(path):
-        print(f"Error: Recipe file not found at '{path}'", file=sys.stderr)
+        print(
+            f"Error: Recipe file not found for '{recipe_path_or_name}'", file=sys.stderr
+        )
         sys.exit(1)
 
     try:

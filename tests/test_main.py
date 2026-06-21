@@ -395,7 +395,9 @@ class TestSparkInstaller(unittest.TestCase):
     ):
         mock_expanduser.side_effect = lambda path: path.replace("~", "/home/user")
         expected_local_path = os.path.abspath("./config/spark/recipes/myrecipe.toml")
-        mock_exists.side_effect = lambda path: path == expected_local_path
+        mock_exists.side_effect = lambda path: (
+            path in (expected_local_path, os.path.dirname(expected_local_path))
+        )
 
         recipe = main.load_recipe("myrecipe")
         self.assertEqual(recipe.get("package", {}).get("name"), "local")
@@ -411,7 +413,9 @@ class TestSparkInstaller(unittest.TestCase):
     def test_load_recipe_fallback_global(self, mock_file, mock_exists, mock_expanduser):
         mock_expanduser.side_effect = lambda path: path.replace("~", "/home/user")
         expected_global_path = "/home/user/.config/spark/recipes/myrecipe.toml"
-        mock_exists.side_effect = lambda path: path == expected_global_path
+        mock_exists.side_effect = lambda path: (
+            path in (expected_global_path, os.path.dirname(expected_global_path))
+        )
 
         recipe = main.load_recipe("myrecipe")
         self.assertEqual(recipe.get("package", {}).get("name"), "global")
