@@ -8,6 +8,7 @@ import tarfile
 import tempfile
 import tomllib
 import urllib.request
+import urllib.parse
 from typing import Any, Dict
 
 
@@ -80,16 +81,61 @@ def get_remote_version(recipe: Dict[str, Any]) -> str:
         print("Error: version url or pattern not defined in recipe.", file=sys.stderr)
         sys.exit(1)
 
+    search_linked_js = recipe.get("version", {}).get("search_linked_js", False)
     headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-    req = urllib.request.Request(version_url, headers=headers)
-    try:
-        with urllib.request.urlopen(req) as response:
-            html = response.read().decode("utf-8")
-    except Exception as e:
-        print(f"Error fetching version URL: {e}", file=sys.stderr)
-        sys.exit(1)
 
-    match = re.search(pattern, html)
+    def fetch_url_text(url: str) -> str:
+        print(f"Checking version URL: {url}")
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req) as response:
+                encoding = response.headers.get_content_charset()
+                if not isinstance(encoding, str):
+                    encoding = "utf-8"
+                content = response.read()
+                if content.startswith(b"\x1f\x8b"):
+                    import gzip
+
+                    content = gzip.decompress(content)
+                return content.decode(encoding, errors="replace")
+        except Exception as e:
+            print(f"Error fetching URL '{url}': {e}", file=sys.stderr)
+            sys.exit(1)
+
+    content_to_search = fetch_url_text(version_url)
+
+    if search_linked_js:
+        # Extract all referenced script tags and preloaded JS files
+        script_paths = re.findall(r'src="([^"]+\.js)"', content_to_search)
+        preload_paths = re.findall(r'href="([^"]+\.js)"', content_to_search)
+        all_js_paths = list(dict.fromkeys(script_paths + preload_paths))
+
+        if not all_js_paths:
+            print(
+                "Error: Could not find any JS scripts referenced in the page HTML.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        found_match = None
+        for js_path in all_js_paths:
+            js_url = urllib.parse.urljoin(version_url, js_path)
+            js_text = fetch_url_text(js_url)
+            match = re.search(pattern, js_text)
+            if match:
+                found_match = match.group(1)
+                break
+
+        if not found_match:
+            print(
+                "Error: Could not parse remote version from any referenced scripts.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        return found_match
+
+    match = re.search(pattern, content_to_search)
     if not match:
         print("Error: Could not parse remote version from URL.", file=sys.stderr)
         sys.exit(1)

@@ -13,9 +13,8 @@ class TestSparkInstaller(unittest.TestCase):
     @patch("urllib.request.urlopen")
     def test_get_remote_version(self, mock_urlopen):
         mock_response = MagicMock()
-        mock_response.read.return_value = (
-            b'<html><p class="latest"><i>Version:</i> Version 1.0.0</p></html>'
-        )
+        mock_response.headers.get_content_charset.return_value = "utf-8"
+        mock_response.read.return_value = b"<html><p>Version 2.0.4</p></html>"
         mock_urlopen.return_value.__enter__.return_value = mock_response
 
         recipe = {
@@ -25,7 +24,56 @@ class TestSparkInstaller(unittest.TestCase):
             }
         }
         version = main.get_remote_version(recipe)
-        self.assertEqual(version, "1.0.0")
+        self.assertEqual(version, "2.0.4")
+
+    @patch("urllib.request.urlopen")
+    def test_get_remote_version_with_search_linked_js(self, mock_urlopen):
+        mock_response_html = MagicMock()
+        mock_response_html.headers.get_content_charset.return_value = "utf-8"
+        mock_response_html.read.return_value = (
+            b'<html><script src="main-12345.js" type="module"></script></html>'
+        )
+
+        mock_response_js = MagicMock()
+        mock_response_js.headers.get_content_charset.return_value = "utf-8"
+        mock_response_js.read.return_value = (
+            b'const downloadUrl = "https://example.com/stable/2.0.4/app.tar.gz";'
+        )
+
+        mock_urlopen.side_effect = [
+            MagicMock(__enter__=MagicMock(return_value=mock_response_html)),
+            MagicMock(__enter__=MagicMock(return_value=mock_response_js)),
+        ]
+
+        recipe = {
+            "version": {
+                "url": "https://example.com/download",
+                "search_linked_js": True,
+                "pattern": r"stable/(\d+\.\d+\.\d+)/app\.tar\.gz",
+            }
+        }
+        version = main.get_remote_version(recipe)
+        self.assertEqual(version, "2.0.4")
+
+    @patch("urllib.request.urlopen")
+    def test_get_remote_version_gzip(self, mock_urlopen):
+        import gzip
+
+        compressed = gzip.compress(b"<html><p>Version 3.2.1</p></html>")
+
+        mock_response = MagicMock()
+        mock_response.headers.get_content_charset.return_value = "utf-8"
+        mock_response.read.return_value = compressed
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        recipe = {
+            "version": {
+                "url": "https://example.com",
+                "pattern": r"Version\s+(\d+\.\d+\.\d+)",
+            }
+        }
+        version = main.get_remote_version(recipe)
+        self.assertEqual(version, "3.2.1")
 
     @patch("os.path.exists")
     @patch("subprocess.run")
