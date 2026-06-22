@@ -900,17 +900,17 @@ def process_uninstall(recipe_arg: str, yes: bool, dry_run: bool = False):
 
     # Remove target dir
     if dry_run:
-        print(f"[Dry-run] Would remove app directory: {target_dir}")
+        print(f"[Dry-run] Would remove package directory: {target_dir}")
         print("[Dry-run] Complete. No files were modified.\n")
     else:
-        print(f"Removing app directory: {target_dir}")
+        print(f"Removing package directory: {target_dir}")
         shutil.rmtree(target_dir)
         print(f"Successfully uninstalled {name}.")
 
 
-def process_upgrade(app: str | None, dry_run: bool):
-    if app:
-        process_install(app, dry_run, False, is_upgrade=True)
+def process_upgrade(package: str | None, dry_run: bool):
+    if package:
+        process_install(package, dry_run, False, is_upgrade=True)
         return
 
     if not os.path.exists(SPARK_PREFIX):
@@ -982,7 +982,7 @@ def process_info():
             if manifest:
                 package_count += 1
 
-                # Count files and size in the app directory
+                # Count files and size in the package directory
                 for root, _, files in os.walk(item_path):
                     for f in files:
                         total_files += 1
@@ -1078,7 +1078,7 @@ def main():
 
     upgrade_parser = subparsers.add_parser("upgrade", help="Upgrade installed packages")
     upgrade_parser.add_argument(
-        "app", nargs="?", help="Specific app to upgrade (optional)"
+        "package", nargs="?", help="Specific package to upgrade (optional)"
     )
     upgrade_parser.add_argument(
         "--dry-run",
@@ -1113,7 +1113,7 @@ def main():
         sys.exit(0)
 
     if args.command == "upgrade":
-        process_upgrade(args.app, getattr(args, "dry_run", False))
+        process_upgrade(args.package, getattr(args, "dry_run", False))
         sys.exit(0)
 
 
