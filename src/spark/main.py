@@ -971,10 +971,6 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("update", help="Update all recipe repositories")
-
-    subparsers.add_parser("list", help="List installed packages")
-
     install_parser = subparsers.add_parser("install", help="Install a package")
     install_parser.add_argument("recipe", help="Recipe name or path to TOML file")
     install_parser.add_argument(
@@ -989,15 +985,7 @@ def main():
         help="Print installation plan without making changes",
     )
 
-    upgrade_parser = subparsers.add_parser("upgrade", help="Upgrade installed packages")
-    upgrade_parser.add_argument(
-        "app", nargs="?", help="Specific app to upgrade (optional)"
-    )
-    upgrade_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print upgrade plan without making changes",
-    )
+    subparsers.add_parser("list", help="List installed packages")
 
     uninstall_parser = subparsers.add_parser("uninstall", help="Uninstall a package")
     uninstall_parser.add_argument("recipe", help="Recipe name or path to TOML file")
@@ -1013,15 +1001,19 @@ def main():
         help="Print uninstallation plan without making changes",
     )
 
+    subparsers.add_parser("update", help="Update all recipe repositories")
+
+    upgrade_parser = subparsers.add_parser("upgrade", help="Upgrade installed packages")
+    upgrade_parser.add_argument(
+        "app", nargs="?", help="Specific app to upgrade (optional)"
+    )
+    upgrade_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print upgrade plan without making changes",
+    )
+
     args = parser.parse_args()
-
-    if args.command == "update":
-        update_repositories()
-        sys.exit(0)
-
-    if args.command == "list":
-        process_list()
-        sys.exit(0)
 
     if args.command == "install":
         process_install(
@@ -1029,14 +1021,22 @@ def main():
         )
         sys.exit(0)
 
-    if args.command == "upgrade":
-        process_upgrade(args.app, getattr(args, "dry_run", False))
+    if args.command == "list":
+        process_list()
         sys.exit(0)
 
     if args.command == "uninstall":
         process_uninstall(
             args.recipe, getattr(args, "yes", False), getattr(args, "dry_run", False)
         )
+        sys.exit(0)
+
+    if args.command == "update":
+        update_repositories()
+        sys.exit(0)
+
+    if args.command == "upgrade":
+        process_upgrade(args.app, getattr(args, "dry_run", False))
         sys.exit(0)
 
 
