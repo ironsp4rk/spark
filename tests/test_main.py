@@ -271,7 +271,7 @@ class TestSparkInstaller(unittest.TestCase):
     @patch("spark.main.verify_gpg")
     @patch("spark.main.extract_archive")
     @patch("spark.main.make_executable")
-    @patch("spark.main.create_symlink")
+    @patch("spark.main.create_cli_symlink")
     @patch("spark.main.install_desktop_file")
     @patch("spark.main.ensure_not_running")
     @patch("spark.main.load_recipe")
@@ -284,7 +284,7 @@ class TestSparkInstaller(unittest.TestCase):
         mock_load_recipe,
         mock_ensure_not_running,
         mock_update_desktop,
-        mock_create_symlink,
+        mock_create_cli_symlink,
         mock_make_executable,
         mock_extract_archive,
         mock_verify,
@@ -313,7 +313,7 @@ class TestSparkInstaller(unittest.TestCase):
         mock_ensure_not_running.assert_called_once()
         mock_extract_archive.assert_called_once()
         mock_make_executable.assert_called_once()
-        mock_create_symlink.assert_called_once()
+        mock_create_cli_symlink.assert_called_once()
         mock_update_desktop.assert_called_once()
 
     @patch("subprocess.run")
@@ -375,7 +375,7 @@ class TestSparkInstaller(unittest.TestCase):
     @patch("os.path.exists")
     @patch("os.remove")
     @patch("os.symlink")
-    def test_create_symlink_custom_bin_dir(
+    def test_create_cli_symlink_custom_cli_dir(
         self, mock_symlink, mock_remove, mock_exists, mock_makedirs
     ):
         mock_exists.return_value = True
@@ -383,10 +383,10 @@ class TestSparkInstaller(unittest.TestCase):
             "package": {"cli_name": "fakebin_custom"},
             "install": {
                 "executable_path": "fake_app",
-                "bin_dir": "/custom/bin",
+                "cli_dir": "/custom/bin",
             },
         }
-        main.create_symlink(recipe, "/opt/fake")
+        main.create_cli_symlink(recipe, "/opt/fake")
         mock_makedirs.assert_called_once_with("/custom/bin", exist_ok=True)
         mock_remove.assert_called_once_with("/custom/bin/fakebin_custom")
         mock_symlink.assert_called_once_with(
@@ -786,7 +786,7 @@ class TestSparkInstaller(unittest.TestCase):
     @patch("spark.main.download_file")
     @patch("spark.main.extract_archive")
     @patch("spark.main.make_executable")
-    @patch("spark.main.create_symlink")
+    @patch("spark.main.create_cli_symlink")
     @patch("spark.main.install_desktop_file")
     @patch("spark.main.ensure_not_running")
     @patch("spark.main.load_recipe")
@@ -795,7 +795,7 @@ class TestSparkInstaller(unittest.TestCase):
         mock_load_recipe,
         mock_ensure_not_running,
         mock_install_desktop,
-        mock_create_symlink,
+        mock_create_cli_symlink,
         mock_make_executable,
         mock_extract,
         mock_download,
@@ -854,6 +854,65 @@ class TestSparkInstaller(unittest.TestCase):
             ],
             check=True,
         )
+
+    @patch("shutil.rmtree")
+    @patch("os.remove")
+    @patch("os.path.exists")
+    @patch("builtins.input")
+    @patch("spark.main.load_recipe")
+    def test_process_uninstall(
+        self,
+        mock_load_recipe,
+        mock_input,
+        mock_exists,
+        mock_remove,
+        mock_rmtree,
+    ):
+        mock_load_recipe.return_value = {
+            "package": {"name": "app", "cli_name": "app-cli"},
+            "install": {"dir_name": "app_dir"},
+            "integration": {"desktop_file": "app.desktop"},
+        }
+        # First exists for target_dir, then cli_symlink, then desktop file
+        mock_exists.return_value = True
+        mock_input.return_value = "y"
+
+        with patch("subprocess.run"):
+            main.process_uninstall("app_recipe", yes=False)
+
+        mock_rmtree.assert_called_with(os.path.join(main.SPARK_PREFIX, "app_dir"))
+        mock_remove.assert_any_call(os.path.expanduser("~/.local/bin/app-cli"))
+        mock_remove.assert_any_call(
+            os.path.expanduser("~/.local/share/applications/app.desktop")
+        )
+
+    @patch("shutil.rmtree")
+    @patch("os.remove")
+    @patch("os.path.exists")
+    @patch("builtins.input")
+    @patch("spark.main.load_recipe")
+    def test_process_uninstall_dry_run(
+        self,
+        mock_load_recipe,
+        mock_input,
+        mock_exists,
+        mock_remove,
+        mock_rmtree,
+    ):
+        mock_load_recipe.return_value = {
+            "package": {"name": "app", "cli_name": "app-cli"},
+            "install": {"dir_name": "app_dir"},
+            "integration": {"desktop_file": "app.desktop"},
+        }
+        mock_exists.return_value = True
+        mock_input.return_value = "y"
+
+        with patch("subprocess.run"):
+            main.process_uninstall("app_recipe", yes=False, dry_run=True)
+
+        mock_rmtree.assert_not_called()
+        mock_remove.assert_not_called()
+        mock_input.assert_called_once()
 
 
 if __name__ == "__main__":

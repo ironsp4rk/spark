@@ -19,6 +19,8 @@ CONFIG_HOME = os.path.join(
     os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "spark"
 )
 GLOBAL_RECIPES_DIR = os.path.join(CONFIG_HOME, "recipes")
+DEFAULT_CLI_DIR = "~/.local/bin"
+DEFAULT_DESKTOP_DIR = "~/.local/share/applications"
 
 
 def _get_spark_prefix() -> str:
@@ -59,6 +61,32 @@ def get_target_dir(recipe: Dict[str, Any]) -> str:
 
     dir_name = dir_name.replace("/", "-").replace("\\", "-")
     return os.path.join(SPARK_PREFIX, dir_name)
+
+
+def get_cli_dir(recipe: Dict[str, Any]) -> str:
+    return os.path.expanduser(recipe.get("install", {}).get("cli_dir", DEFAULT_CLI_DIR))
+
+
+def get_desktop_filename(recipe: Dict[str, Any]) -> str | None:
+    integration = recipe.get("integration", {})
+    desktop_file = integration.get("desktop_file")
+    generate = integration.get("generate", False)
+
+    if not desktop_file and not generate:
+        return None
+
+    if not desktop_file:
+        pkg_name = recipe.get("package", {}).get("name", "app")
+        desktop_file = f"{pkg_name}.desktop"
+
+    return desktop_file
+
+
+def update_desktop_database(desktop_dir: str):
+    try:
+        subprocess.run(["update-desktop-database", desktop_dir], check=True)
+    except Exception as e:
+        print(f"Warning: Failed to update desktop database: {e}", file=sys.stderr)
 
 
 def load_recipe(recipe_path_or_name: str) -> Dict[str, Any]:
@@ -130,11 +158,10 @@ def get_remote_pattern(recipe: Dict[str, Any]) -> str:
 
 def get_local_version(recipe: Dict[str, Any]) -> str:
     cli_name = recipe.get("package", {}).get("cli_name")
+    cli_dir = get_cli_dir(recipe)
+
     executable_path = recipe.get("install", {}).get("executable_path")
     target_dir = get_target_dir(recipe)
-    bin_dir = os.path.expanduser(
-        recipe.get("install", {}).get("bin_dir", "~/.local/bin")
-    )
 
     version_config = recipe.get("version", {})
     local_strategy = version_config.get("local_strategy", "manifest")
@@ -171,7 +198,7 @@ def get_local_version(recipe: Dict[str, Any]) -> str:
     if local_strategy == "cli":
         check_paths = []
         if cli_name:
-            check_paths.append(os.path.join(bin_dir, cli_name))
+            check_paths.append(os.path.join(cli_dir, cli_name))
         if target_dir and executable_path:
             check_paths.append(os.path.join(target_dir, executable_path))
 
@@ -408,28 +435,26 @@ def make_executable(recipe: Dict[str, Any], target_dir: str, dry_run: bool = Fal
                 os.chmod(extra_path, 0o755)
 
 
-def create_symlink(recipe: Dict[str, Any], target_dir: str, dry_run: bool = False):
+def create_cli_symlink(recipe: Dict[str, Any], target_dir: str, dry_run: bool = False):
     cli_name = recipe.get("package", {}).get("cli_name")
     if not cli_name:
         return
 
-    bin_dir = os.path.expanduser(
-        recipe.get("install", {}).get("bin_dir", "~/.local/bin")
-    )
-    symlink_path = os.path.join(bin_dir, cli_name)
+    cli_dir = get_cli_dir(recipe)
+    cli_symlink_path = os.path.join(cli_dir, cli_name)
 
     executable_path = recipe.get("install", {}).get("executable_path", "")
     target_exec = os.path.join(target_dir, executable_path)
 
     if dry_run:
-        print(f"[Dry-run] Would create directory: {bin_dir}")
-        print(f"[Dry-run] Would remove existing symlink: {symlink_path}")
-        print(f"[Dry-run] Would create symlink: {symlink_path} -> {target_exec}")
+        print(f"[Dry-run] Would create directory: {cli_dir}")
+        print(f"[Dry-run] Would remove existing symlink: {cli_symlink_path}")
+        print(f"[Dry-run] Would create symlink: {cli_symlink_path} -> {target_exec}")
     else:
-        os.makedirs(bin_dir, exist_ok=True)
-        if os.path.exists(symlink_path) or os.path.islink(symlink_path):
-            os.remove(symlink_path)
-        os.symlink(target_exec, symlink_path)
+        os.makedirs(cli_dir, exist_ok=True)
+        if os.path.exists(cli_symlink_path) or os.path.islink(cli_symlink_path):
+            os.remove(cli_symlink_path)
+        os.symlink(target_exec, cli_symlink_path)
 
 
 def resolve_icon_path(recipe: Dict[str, Any], target_dir: str) -> tuple[str, str]:
@@ -540,16 +565,11 @@ def patch_existing_desktop_file(
 def install_desktop_file(
     recipe: Dict[str, Any], target_dir: str, dry_run: bool = False, active_dir: str = ""
 ):
-    integration = recipe.get("integration", {})
-    desktop_file = integration.get("desktop_file")
-    generate = integration.get("generate", False)
-
-    if not desktop_file and not generate:
+    desktop_file = get_desktop_filename(recipe)
+    if not desktop_file:
         return
 
-    if not desktop_file:
-        pkg_name = recipe.get("package", {}).get("name", "app")
-        desktop_file = f"{pkg_name}.desktop"
+    generate = recipe.get("integration", {}).get("generate", False)
 
     check_dir = active_dir if active_dir else target_dir
     icon_path, icon_source = resolve_icon_path(recipe, check_dir)
@@ -568,7 +588,7 @@ def install_desktop_file(
         if not content:
             return
 
-    desktop_dir = os.path.expanduser("~/.local/share/applications")
+    desktop_dir = os.path.expanduser(DEFAULT_DESKTOP_DIR)
     dest_path = os.path.join(desktop_dir, os.path.basename(desktop_file))
 
     if dry_run:
@@ -588,10 +608,7 @@ def install_desktop_file(
         with open(dest_path, "w") as f:
             f.write(content)
 
-        try:
-            subprocess.run(["update-desktop-database", desktop_dir], check=True)
-        except Exception as e:
-            print(f"Warning: Failed to update desktop database: {e}", file=sys.stderr)
+        update_desktop_database(desktop_dir)
 
 
 def update_repositories():
@@ -703,7 +720,7 @@ def process_install(
             print(f"Installing {name} version {remote_version}...")
 
     executable_path = recipe.get("install", {}).get("executable_path", "")
-    if executable_path and not dry_run:
+    if executable_path:
         ensure_not_running(os.path.basename(executable_path))
 
     download_url_template = recipe.get("download", {}).get("url", "")
@@ -769,7 +786,7 @@ def process_install(
 
         make_executable(recipe, target_dir, dry_run=dry_run)
 
-        create_symlink(recipe, target_dir, dry_run=dry_run)
+        create_cli_symlink(recipe, target_dir, dry_run=dry_run)
 
         print("Integrating desktop file...")
         install_desktop_file(recipe, target_dir, dry_run=dry_run, active_dir=active_dir)
@@ -796,6 +813,79 @@ def process_install(
     print(
         f"{name} has been successfully installed/updated to version {remote_version}!\n"
     )
+
+
+def process_uninstall(recipe_arg: str, yes: bool, dry_run: bool = False):
+    recipe = load_recipe(recipe_arg)
+    name = recipe.get("package", {}).get("name", "Unknown")
+
+    if dry_run:
+        print(f"Executing dry-run uninstallation for {name}...")
+
+    local_version = get_local_version(recipe)
+    target_dir = get_target_dir(recipe)
+
+    if not os.path.exists(target_dir):
+        print(f"{name} is not currently installed.")
+        return
+
+    print(
+        f"{name} is installed (version {local_version if local_version else 'unknown'})."
+    )
+
+    if not yes:
+        try:
+            choice = (
+                input(f"Are you sure you want to uninstall {name}? [y/N]: ")
+                .strip()
+                .lower()
+            )
+        except KeyboardInterrupt:
+            print("\nUninstallation aborted.", file=sys.stderr)
+            sys.exit(1)
+        if choice != "y":
+            print("Uninstallation aborted.")
+            return
+
+    executable_path = recipe.get("install", {}).get("executable_path", "")
+    if executable_path:
+        ensure_not_running(os.path.basename(executable_path))
+
+    # Remove CLI symlink
+    cli_name = recipe.get("package", {}).get("cli_name")
+    if cli_name:
+        cli_dir = get_cli_dir(recipe)
+        cli_symlink_path = os.path.join(cli_dir, cli_name)
+        if os.path.exists(cli_symlink_path) or os.path.islink(cli_symlink_path):
+            if dry_run:
+                print(f"[Dry-run] Would remove CLI symlink: {cli_symlink_path}")
+            else:
+                print(f"Removing CLI symlink: {cli_symlink_path}")
+                os.remove(cli_symlink_path)
+
+    # Remove desktop file
+    desktop_file = get_desktop_filename(recipe)
+    if desktop_file:
+        desktop_dir = os.path.expanduser(DEFAULT_DESKTOP_DIR)
+        dest_path = os.path.join(desktop_dir, os.path.basename(desktop_file))
+
+        if os.path.exists(dest_path):
+            if dry_run:
+                print(f"[Dry-run] Would remove desktop file: {dest_path}")
+                print(f"[Dry-run] Would update desktop database: {desktop_dir}")
+            else:
+                print(f"Removing desktop file: {dest_path}")
+                os.remove(dest_path)
+                update_desktop_database(desktop_dir)
+
+    # Remove target dir
+    if dry_run:
+        print(f"[Dry-run] Would remove app directory: {target_dir}")
+        print("[Dry-run] Complete. No files were modified.\n")
+    else:
+        print(f"Removing app directory: {target_dir}")
+        shutil.rmtree(target_dir)
+        print(f"Successfully uninstalled {name}.")
 
 
 def process_upgrade(app: str | None, dry_run: bool):
@@ -871,6 +961,20 @@ def main():
         help="Print upgrade plan without making changes",
     )
 
+    uninstall_parser = subparsers.add_parser("uninstall", help="Uninstall a package")
+    uninstall_parser.add_argument("recipe", help="Recipe name or path to TOML file")
+    uninstall_parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Confirm uninstallation automatically",
+    )
+    uninstall_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print uninstallation plan without making changes",
+    )
+
     args = parser.parse_args()
 
     if args.command == "update":
@@ -885,6 +989,12 @@ def main():
 
     if args.command == "upgrade":
         process_upgrade(args.app, getattr(args, "dry_run", False))
+        sys.exit(0)
+
+    if args.command == "uninstall":
+        process_uninstall(
+            args.recipe, getattr(args, "yes", False), getattr(args, "dry_run", False)
+        )
         sys.exit(0)
 
 
