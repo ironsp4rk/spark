@@ -949,7 +949,7 @@ class TestSparkInstaller(unittest.TestCase):
     def test_process_info_empty(self):
         with patch("spark.main.SPARK_PREFIX", "/does/not/exist"):
             with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
-                main.process_info()
+                main.process_global_info()
                 self.assertIn("0 packages, 0 files, 0B", mock_stdout.getvalue())
 
     def test_process_info_with_packages(self):
@@ -1006,10 +1006,124 @@ class TestSparkInstaller(unittest.TestCase):
                             with patch(
                                 "sys.stdout", new_callable=io.StringIO
                             ) as mock_stdout:
-                                main.process_info()
+                                main.process_global_info()
                                 output = mock_stdout.getvalue()
                                 self.assertIn("1 packages, 5 files", output)
                                 self.assertIn("B", output)
+
+    def test_get_disk_usage(self):
+        mock_st = MagicMock(spec=os.stat_result)
+        mock_st.st_blocks = 10
+        self.assertEqual(main.get_disk_usage(mock_st), 5120)
+
+        mock_st_no_blocks = MagicMock()
+        del mock_st_no_blocks.st_blocks
+        mock_st_no_blocks.st_size = 1234
+        self.assertEqual(main.get_disk_usage(mock_st_no_blocks), 1234)
+
+    def test_calculate_path_footprint_non_existent(self):
+        with patch("os.path.exists", return_value=False):
+            with patch("os.path.islink", return_value=False):
+                self.assertEqual(main.calculate_path_footprint("/fake/path"), (0, 0))
+
+    def test_calculate_path_footprint_file(self):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"12345")
+            temp_name = f.name
+
+        try:
+            count, size = main.calculate_path_footprint(temp_name)
+            self.assertEqual(count, 1)
+            self.assertGreater(size, 0)
+        finally:
+            os.unlink(temp_name)
+
+    def test_calculate_path_footprint_directory(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file1 = os.path.join(temp_dir, "file1.txt")
+            file2 = os.path.join(temp_dir, "file2.txt")
+            with open(file1, "w") as f:
+                f.write("Hello")
+            with open(file2, "w") as f:
+                f.write("World!")
+
+            count, size = main.calculate_path_footprint(temp_dir)
+            self.assertEqual(count, 2)
+            self.assertGreater(size, 0)
+
+    @patch("spark.main.load_recipe")
+    @patch("spark.main.get_local_version")
+    @patch("spark.main.get_target_dir")
+    @patch("spark.main.get_cli_symlink_path")
+    @patch("spark.main.get_desktop_filename")
+    @patch("spark.main.get_desktop_dest_path")
+    @patch("spark.main.calculate_path_footprint")
+    def test_process_package_info(
+        self,
+        mock_footprint,
+        mock_get_desktop_dest,
+        mock_get_desktop_file,
+        mock_get_cli,
+        mock_get_target,
+        mock_get_local_version,
+        mock_load_recipe,
+    ):
+        mock_load_recipe.return_value = {
+            "package": {"name": "app1", "description": "test app"},
+            "version": {"url": "https://example.com/version"},
+            "_recipe_path": os.path.join(main.GLOBAL_RECIPES_DIR, "core/app1.toml"),
+        }
+        mock_get_local_version.return_value = "1.0.0"
+        mock_get_target.return_value = "/fake/target"
+        mock_get_cli.return_value = "/fake/bin/app1"
+        mock_get_desktop_file.return_value = "app1.desktop"
+        mock_get_desktop_dest.return_value = "/fake/desktop/app1.desktop"
+
+        # We need os.path.exists to return true for target, cli, and desktop
+        mock_footprint.side_effect = [(10, 40960), (1, 4096), (1, 4096)]
+
+        with patch("os.path.exists", return_value=True):
+            with patch("os.path.islink", return_value=True):
+                with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+                    main.process_package_info("app1")
+                    output = mock_stdout.getvalue()
+                    self.assertIn("app1", output)
+                    self.assertIn("1.0.0", output)
+                    self.assertIn("12 files", output)  # total files = 10 + 1 + 1 = 12
+                    self.assertIn("48.0KB", output)  # total size = 49152 bytes = 48KB
+                    self.assertIn("test app", output)
+                    self.assertIn("https://example.com/version", output)
+                    self.assertIn(f"{main.CORE_REPO_URL}/blob/main/app1.toml", output)
+                    self.assertIn("Artifacts", output)
+
+    @patch("spark.main.load_recipe")
+    @patch("spark.main.get_local_version")
+    def test_process_package_info_not_installed(
+        self,
+        mock_get_local_version,
+        mock_load_recipe,
+    ):
+        mock_load_recipe.return_value = {
+            "package": {"name": "app2", "description": "not installed app"},
+            "version": {"url": "https://example.com/app2"},
+            "_recipe_path": "/custom/path/app2.toml",
+        }
+        mock_get_local_version.return_value = None
+
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            main.process_package_info("app2")
+            output = mock_stdout.getvalue()
+            self.assertIn("app2", output)
+            self.assertIn("Not installed", output)
+            self.assertIn("✘", output)
+            self.assertIn("not installed app", output)
+            self.assertIn("https://example.com/app2", output)
+            self.assertIn("/custom/path/app2.toml", output)
+            self.assertNotIn("Artifacts", output)
 
 
 if __name__ == "__main__":

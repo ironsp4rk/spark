@@ -28,6 +28,84 @@ def fatal_error(message: str) -> NoReturn:
     sys.exit(1)
 
 
+def color_text(text: str, color_code: str) -> str:
+    return f"{color_code}{text}\033[0m"
+
+
+def red(text: str) -> str:
+    return color_text(text, "\033[31m")
+
+
+def green(text: str) -> str:
+    return color_text(text, "\033[32m")
+
+
+def blue(text: str) -> str:
+    return color_text(text, "\033[34m")
+
+
+def bold(text: str) -> str:
+    return color_text(text, "\033[1m")
+
+
+def underline(text: str) -> str:
+    return f"\033[4m{text}\033[24m"
+
+
+def format_size(size_bytes: int) -> str:
+    if size_bytes >= 1024**3:
+        return f"{size_bytes / (1024**3):.1f}GB"
+    elif size_bytes >= 1024**2:
+        return f"{size_bytes / (1024**2):.1f}MB"
+    elif size_bytes >= 1024:
+        return f"{size_bytes / 1024:.1f}KB"
+    else:
+        return f"{size_bytes}B"
+
+
+def get_disk_usage(st: os.stat_result) -> int:
+    return getattr(st, "st_blocks", 0) * 512 or st.st_size
+
+
+def calculate_path_footprint(path: str) -> tuple[int, int]:
+    """Returns a tuple of (file_count, total_size_bytes) for a given path."""
+    if not os.path.exists(path) and not os.path.islink(path):
+        return 0, 0
+
+    file_count = 0
+    total_size = 0
+
+    if os.path.isfile(path) or os.path.islink(path):
+        try:
+            st = os.lstat(path)
+            total_size = get_disk_usage(st)
+        except OSError:
+            pass
+        return 1, total_size
+
+    try:
+        st = os.lstat(path)
+        total_size += get_disk_usage(st)
+    except OSError:
+        pass
+
+    for root, dirs, files in os.walk(path):
+        for d in dirs:
+            try:
+                st = os.lstat(os.path.join(root, d))
+                total_size += get_disk_usage(st)
+            except OSError:
+                pass
+        for f in files:
+            file_count += 1
+            try:
+                st = os.lstat(os.path.join(root, f))
+                total_size += get_disk_usage(st)
+            except OSError:
+                pass
+    return file_count, total_size
+
+
 def get_package_name(recipe: Dict[str, Any]) -> str:
     return recipe.get("package", {}).get("name", "app")
 
@@ -187,6 +265,7 @@ def load_recipe(recipe_path_or_name: str, quiet: bool = False) -> Dict[str, Any]
         with open(path, "rb") as f:
             recipe = tomllib.load(f)
             recipe["_recipe_dir"] = os.path.dirname(path)
+            recipe["_recipe_path"] = path
             if not quiet:
                 print(f"Using recipe: {path}")
             return recipe
@@ -422,19 +501,10 @@ def extract_archive(
             src_dir = current
 
         # Calculate package stats
-        file_count = 0
-        total_size = 0
-        for root, _, files in os.walk(src_dir):
-            for f in files:
-                file_count += 1
-                file_path = os.path.join(root, f)
-                try:
-                    total_size += os.path.getsize(file_path)
-                except OSError:
-                    pass
+        file_count, total_size = calculate_path_footprint(src_dir)
 
-        size_mb = total_size / (1024 * 1024)
-        print(f"Extracted {file_count} files ({size_mb:.2f} MB)")
+        size_str = format_size(total_size)
+        print(f"Extracted {file_count} files ({size_str})")
 
         shutil.move(src_dir, target_dir)
 
@@ -966,7 +1036,7 @@ def process_list():
         print(pkg)
 
 
-def process_info():
+def process_global_info():
     if not os.path.exists(SPARK_PREFIX):
         print("0 packages, 0 files, 0B")
         return
@@ -983,17 +1053,9 @@ def process_info():
                 package_count += 1
 
                 # Count files and size in the package directory
-                for root, _, files in os.walk(item_path):
-                    for f in files:
-                        total_files += 1
-                        file_path = os.path.join(root, f)
-                        try:
-                            if not os.path.islink(file_path):
-                                total_size += os.path.getsize(file_path)
-                            else:
-                                total_size += os.lstat(file_path).st_size
-                        except OSError:
-                            pass
+                pkg_files, pkg_size = calculate_path_footprint(item_path)
+                total_files += pkg_files
+                total_size += pkg_size
 
                 recipe_name = manifest.get("recipe_name")
                 if recipe_name:
@@ -1001,39 +1063,94 @@ def process_info():
                         recipe = load_recipe(recipe_name, quiet=True)
 
                         cli_symlink = get_cli_symlink_path(recipe)
-                        if cli_symlink and (
-                            os.path.exists(cli_symlink) or os.path.islink(cli_symlink)
-                        ):
-                            total_files += 1
-                            try:
-                                total_size += os.lstat(cli_symlink).st_size
-                            except OSError:
-                                pass
+                        if cli_symlink:
+                            c_files, c_size = calculate_path_footprint(cli_symlink)
+                            total_files += c_files
+                            total_size += c_size
 
                         desktop_file = get_desktop_filename(recipe)
                         if desktop_file:
                             desktop_dest = get_desktop_dest_path(desktop_file)
-                            if os.path.exists(desktop_dest):
-                                total_files += 1
-                                try:
-                                    total_size += os.lstat(desktop_dest).st_size
-                                except OSError:
-                                    pass
+                            if desktop_dest:
+                                d_files, d_size = calculate_path_footprint(desktop_dest)
+                                total_files += d_files
+                                total_size += d_size
                     except SystemExit:
                         pass
 
-    size_gb = total_size / (1024**3)
-
-    if size_gb >= 1.0:
-        size_str = f"{size_gb:.1f}GB"
-    elif total_size >= 1024**2:
-        size_str = f"{total_size / (1024**2):.1f}MB"
-    elif total_size >= 1024:
-        size_str = f"{total_size / 1024:.1f}KB"
-    else:
-        size_str = f"{total_size}B"
-
+    size_str = format_size(total_size)
     print(f"{package_count} packages, {total_files:,} files, {size_str}")
+
+
+def process_package_info(package_arg: str):
+    recipe = load_recipe(package_arg, quiet=True)
+    name = get_package_name(recipe)
+    description = recipe.get("package", {}).get("description", "")
+    version_url = recipe.get("version", {}).get("url", "")
+
+    local_version = get_local_version(recipe)
+    is_installed = bool(local_version)
+
+    target_dir = get_target_dir(recipe)
+    cli_symlink = get_cli_symlink_path(recipe)
+    desktop_file = get_desktop_filename(recipe)
+    desktop_dest = get_desktop_dest_path(desktop_file) if desktop_file else None
+
+    total_files = 0
+    total_size = 0
+    if is_installed and os.path.exists(target_dir):
+        t_files, t_size = calculate_path_footprint(target_dir)
+        total_files += t_files
+        total_size += t_size
+
+        if cli_symlink:
+            c_files, c_size = calculate_path_footprint(cli_symlink)
+            total_files += c_files
+            total_size += c_size
+
+        if desktop_dest:
+            d_files, d_size = calculate_path_footprint(desktop_dest)
+            total_files += d_files
+            total_size += d_size
+
+    if is_installed:
+        size_str = format_size(total_size)
+        print(
+            f"{green('==>')} {bold(name)} {green('✔')}: {local_version} ({total_files:,} files, {size_str})"
+        )
+    else:
+        print(f"{green('==>')} {bold(name)} {red('✘')}: (Not installed)")
+
+    if description:
+        print(description)
+    if version_url:
+        print(underline(version_url))
+
+    recipe_path = recipe.get("_recipe_path", "")
+    core_dir = os.path.expanduser(os.path.join(GLOBAL_RECIPES_DIR, "core"))
+
+    if recipe_path.startswith(core_dir):
+        rel_path = os.path.relpath(recipe_path, core_dir)
+        from_str = f"{CORE_REPO_URL}/blob/main/{rel_path}"
+    else:
+        from_str = recipe_path
+
+    print(f"From: {underline(from_str)}")
+
+    if is_installed:
+        print(f"{blue('==>')} {bold('Artifacts')}")
+        print(f"Directory: {target_dir}")
+        if cli_symlink and (os.path.exists(cli_symlink) or os.path.islink(cli_symlink)):
+            print(f"CLI: {cli_symlink}")
+        if desktop_dest and os.path.exists(desktop_dest):
+            print(f"Desktop: {desktop_dest}")
+
+
+def process_info_command(package: str | None):
+    if package:
+        process_package_info(package)
+    else:
+        process_global_info()
 
 
 def main():
@@ -1042,7 +1159,12 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("info", help="Display global summary of installed packages")
+    info_parser = subparsers.add_parser(
+        "info", help="Display summary of installed packages or specific package info"
+    )
+    info_parser.add_argument(
+        "package", nargs="?", help="Specific package to show info for (optional)"
+    )
 
     install_parser = subparsers.add_parser("install", help="Install a package")
     install_parser.add_argument("recipe", help="Recipe name or path to TOML file")
@@ -1089,7 +1211,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "info":
-        process_info()
+        process_info_command(args.package)
         sys.exit(0)
 
     if args.command == "install":
