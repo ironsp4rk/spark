@@ -111,7 +111,19 @@ def get_local_version(recipe: Dict[str, Any]) -> str:
     )
 
     version_config = recipe.get("version", {})
-    local_strategy = version_config.get("local_strategy", "cli")
+    local_strategy = version_config.get("local_strategy", "manifest")
+
+    if local_strategy == "manifest":
+        if target_dir:
+            manifest_path = os.path.join(target_dir, MANIFEST_FILENAME)
+            if os.path.exists(manifest_path):
+                try:
+                    with open(manifest_path, "rb") as f:
+                        manifest = tomllib.load(f)
+                        return manifest.get("version", "")
+                except Exception:
+                    pass
+        return ""
 
     if local_strategy == "file":
         local_file = version_config.get("local_file")
@@ -460,7 +472,11 @@ def generate_new_desktop_file(
 
 
 def patch_existing_desktop_file(
-    recipe: Dict[str, Any], read_dir: str, planned_target_dir: str, icon_path: str, desktop_file: str
+    recipe: Dict[str, Any],
+    read_dir: str,
+    planned_target_dir: str,
+    icon_path: str,
+    desktop_file: str,
 ) -> str:
     src_desktop = os.path.join(read_dir, desktop_file)
     if not os.path.exists(src_desktop):

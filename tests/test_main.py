@@ -90,7 +90,10 @@ class TestSparkInstaller(unittest.TestCase):
                 "dir_name": "fake_app",
                 "executable_path": "fake_app",
             },
-            "version": {"pattern": r"Version\s+(\d+\.\d+\.\d+)"},
+            "version": {
+                "pattern": r"Version\s+(\d+\.\d+\.\d+)",
+                "local_strategy": "cli",
+            },
         }
 
         version = main.get_local_version(recipe)
@@ -114,6 +117,7 @@ class TestSparkInstaller(unittest.TestCase):
             "version": {
                 "pattern": r"Version\s+(\d+\.\d+\.\d+)",
                 "local_pattern": r"v(\d+\.\d+\.\d+)",
+                "local_strategy": "cli",
             },
         }
 
@@ -129,7 +133,10 @@ class TestSparkInstaller(unittest.TestCase):
                 "dir_name": "fake_app",
                 "executable_path": "fake_app",
             },
-            "version": {"pattern": r"Version\s+(\d+\.\d+\.\d+)"},
+            "version": {
+                "pattern": r"Version\s+(\d+\.\d+\.\d+)",
+                "local_strategy": "cli",
+            },
         }
         version = main.get_local_version(recipe)
         self.assertEqual(version, "")
@@ -630,6 +637,22 @@ class TestSparkInstaller(unittest.TestCase):
         self.assertEqual(version, "4.5.6")
         expected_path = os.path.join(main.SPARK_OPT_ROOT, "app", "version.txt")
         mock_file.assert_called_once_with(expected_path, "r")
+
+    @patch("os.path.exists")
+    @patch("builtins.open", new_callable=mock_open, read_data=b'version = "7.8.9"\n')
+    def test_get_local_version_manifest_strategy(self, mock_file, mock_exists):
+        mock_exists.return_value = True
+        recipe = {
+            "package": {"name": "app"},
+            "install": {"dir_name": "app"},
+            "version": {
+                # Implicitly uses manifest default
+            },
+        }
+        version = main.get_local_version(recipe)
+        self.assertEqual(version, "7.8.9")
+        expected_path = os.path.join(main.SPARK_OPT_ROOT, "app", ".spark-manifest.toml")
+        mock_file.assert_called_once_with(expected_path, "rb")
 
     @patch("os.path.exists")
     @patch(
