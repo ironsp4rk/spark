@@ -142,7 +142,7 @@ def update_desktop_database(desktop_dir: str):
         print(f"Warning: Failed to update desktop database: {e}", file=sys.stderr)
 
 
-def load_recipe(recipe_path_or_name: str) -> Dict[str, Any]:
+def load_recipe(recipe_path_or_name: str, quiet: bool = False) -> Dict[str, Any]:
     resolved_path = os.path.expanduser(recipe_path_or_name)
     if os.path.exists(resolved_path):
         path = os.path.abspath(resolved_path)
@@ -187,7 +187,8 @@ def load_recipe(recipe_path_or_name: str) -> Dict[str, Any]:
         with open(path, "rb") as f:
             recipe = tomllib.load(f)
             recipe["_recipe_dir"] = os.path.dirname(path)
-            print(f"Using recipe: {path}")
+            if not quiet:
+                print(f"Using recipe: {path}")
             return recipe
     except Exception as e:
         fatal_error(f"parsing recipe TOML file '{path}': {e}")
@@ -965,11 +966,83 @@ def process_list():
         print(pkg)
 
 
+def process_info():
+    if not os.path.exists(SPARK_PREFIX):
+        print("0 packages, 0 files, 0B")
+        return
+
+    package_count = 0
+    total_files = 0
+    total_size = 0
+
+    for item in os.listdir(SPARK_PREFIX):
+        item_path = os.path.join(SPARK_PREFIX, item)
+        if os.path.isdir(item_path):
+            manifest = read_manifest(item_path)
+            if manifest:
+                package_count += 1
+
+                # Count files and size in the app directory
+                for root, _, files in os.walk(item_path):
+                    for f in files:
+                        total_files += 1
+                        file_path = os.path.join(root, f)
+                        try:
+                            if not os.path.islink(file_path):
+                                total_size += os.path.getsize(file_path)
+                            else:
+                                total_size += os.lstat(file_path).st_size
+                        except OSError:
+                            pass
+
+                recipe_name = manifest.get("recipe_name")
+                if recipe_name:
+                    try:
+                        recipe = load_recipe(recipe_name, quiet=True)
+
+                        cli_symlink = get_cli_symlink_path(recipe)
+                        if cli_symlink and (
+                            os.path.exists(cli_symlink) or os.path.islink(cli_symlink)
+                        ):
+                            total_files += 1
+                            try:
+                                total_size += os.lstat(cli_symlink).st_size
+                            except OSError:
+                                pass
+
+                        desktop_file = get_desktop_filename(recipe)
+                        if desktop_file:
+                            desktop_dest = get_desktop_dest_path(desktop_file)
+                            if os.path.exists(desktop_dest):
+                                total_files += 1
+                                try:
+                                    total_size += os.lstat(desktop_dest).st_size
+                                except OSError:
+                                    pass
+                    except SystemExit:
+                        pass
+
+    size_gb = total_size / (1024**3)
+
+    if size_gb >= 1.0:
+        size_str = f"{size_gb:.1f}GB"
+    elif total_size >= 1024**2:
+        size_str = f"{total_size / (1024**2):.1f}MB"
+    elif total_size >= 1024:
+        size_str = f"{total_size / 1024:.1f}KB"
+    else:
+        size_str = f"{total_size}B"
+
+    print(f"{package_count} packages, {total_files:,} files, {size_str}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="S.P.A.R.K. (Standalone Package Acquisition & Resolution Kit) - A custom package manager designed to acquire, extract, and integrate pre-compiled application binaries from arbitrary web sources into user-space."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser("info", help="Display global summary of installed packages")
 
     install_parser = subparsers.add_parser("install", help="Install a package")
     install_parser.add_argument("recipe", help="Recipe name or path to TOML file")
@@ -1014,6 +1087,10 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.command == "info":
+        process_info()
+        sys.exit(0)
 
     if args.command == "install":
         process_install(

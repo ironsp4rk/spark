@@ -946,6 +946,71 @@ class TestSparkInstaller(unittest.TestCase):
         output = mock_stdout.getvalue().strip().split("\n")
         self.assertEqual(output, ["recipe1"])
 
+    def test_process_info_empty(self):
+        with patch("spark.main.SPARK_PREFIX", "/does/not/exist"):
+            with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+                main.process_info()
+                self.assertIn("0 packages, 0 files, 0B", mock_stdout.getvalue())
+
+    def test_process_info_with_packages(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("spark.main.SPARK_PREFIX", temp_dir):
+                # Create fake package dir
+                app_dir = os.path.join(temp_dir, "app1")
+                os.makedirs(app_dir)
+
+                # Create fake manifest
+                manifest_path = os.path.join(app_dir, ".spark-manifest.toml")
+                with open(manifest_path, "w") as f:
+                    f.write(
+                        'package_name = "app1"\nrecipe_name = "app1-recipe"\nversion = "1.0"\n'
+                    )
+
+                # Create fake files in app dir
+                file1 = os.path.join(app_dir, "file1.txt")
+                with open(file1, "w") as f:
+                    f.write("Hello")
+                file2 = os.path.join(app_dir, "file2.txt")
+                with open(file2, "w") as f:
+                    f.write("World!")
+
+                def mock_load_recipe_side_effect(name, quiet=False):
+                    if name == "app1-recipe":
+                        return {
+                            "package": {"name": "app1", "cli_name": "app1-cli"},
+                            "integration": {"desktop_file": "app1.desktop"},
+                        }
+                    return {}
+
+                with patch(
+                    "spark.main.load_recipe", side_effect=mock_load_recipe_side_effect
+                ):
+                    with patch("spark.main.get_cli_symlink_path") as mock_get_cli:
+                        with patch(
+                            "spark.main.get_desktop_dest_path"
+                        ) as mock_get_desktop:
+                            mock_get_cli.return_value = os.path.join(
+                                temp_dir, "fake-cli"
+                            )
+                            with open(mock_get_cli.return_value, "w") as f:
+                                f.write("CLI")
+
+                            mock_get_desktop.return_value = os.path.join(
+                                temp_dir, "fake.desktop"
+                            )
+                            with open(mock_get_desktop.return_value, "w") as f:
+                                f.write("DESKTOP")
+
+                            with patch(
+                                "sys.stdout", new_callable=io.StringIO
+                            ) as mock_stdout:
+                                main.process_info()
+                                output = mock_stdout.getvalue()
+                                self.assertIn("1 packages, 5 files", output)
+                                self.assertIn("B", output)
+
 
 if __name__ == "__main__":
     unittest.main()
