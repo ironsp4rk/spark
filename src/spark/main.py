@@ -15,8 +15,34 @@ CORE_REPO_URL = "https://github.com/ironsp4rk/spark-recipes"
 LOCAL_RECIPES_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "config", "spark", "recipes")
 )
-GLOBAL_RECIPES_DIR = "~/.config/spark/recipes"
-SPARK_OPT_ROOT = os.path.expanduser("~/.local/opt")
+CONFIG_HOME = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "spark"
+)
+GLOBAL_RECIPES_DIR = os.path.join(CONFIG_HOME, "recipes")
+
+
+def _get_spark_prefix() -> str:
+    env_prefix = os.environ.get("SPARK_PREFIX")
+    if env_prefix:
+        return os.path.expanduser(env_prefix)
+
+    default_prefix = "~/.local/opt"
+    config_path = os.path.join(CONFIG_HOME, "config.toml")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "rb") as f:
+                config = tomllib.load(f)
+                prefix = config.get("core", {}).get("prefix")
+                if prefix:
+                    return os.path.expanduser(prefix)
+        except Exception as e:
+            print(
+                f"Warning: Failed to read config at {config_path}: {e}", file=sys.stderr
+            )
+    return os.path.expanduser(default_prefix)
+
+
+SPARK_PREFIX = _get_spark_prefix()
 MANIFEST_FILENAME = ".spark-manifest.toml"
 
 
@@ -32,7 +58,7 @@ def get_target_dir(recipe: Dict[str, Any]) -> str:
         sys.exit(1)
 
     dir_name = dir_name.replace("/", "-").replace("\\", "-")
-    return os.path.join(SPARK_OPT_ROOT, dir_name)
+    return os.path.join(SPARK_PREFIX, dir_name)
 
 
 def load_recipe(recipe_path_or_name: str) -> Dict[str, Any]:
@@ -777,13 +803,13 @@ def process_upgrade(app: str | None, dry_run: bool):
         process_install(app, dry_run, False, is_upgrade=True)
         return
 
-    if not os.path.exists(SPARK_OPT_ROOT):
+    if not os.path.exists(SPARK_PREFIX):
         print("No packages installed via spark.")
         return
 
     manifests = []
-    for item in os.listdir(SPARK_OPT_ROOT):
-        item_path = os.path.join(SPARK_OPT_ROOT, item)
+    for item in os.listdir(SPARK_PREFIX):
+        item_path = os.path.join(SPARK_PREFIX, item)
         if os.path.isdir(item_path):
             manifest_file = os.path.join(item_path, MANIFEST_FILENAME)
             if os.path.exists(manifest_file):
@@ -824,7 +850,10 @@ def main():
     install_parser = subparsers.add_parser("install", help="Install a package")
     install_parser.add_argument("recipe", help="Recipe name or path to TOML file")
     install_parser.add_argument(
-        "-f", "--force", action="store_true", help="Force install a package (overwrite existing)"
+        "-f",
+        "--force",
+        action="store_true",
+        help="Force install a package (overwrite existing)",
     )
     install_parser.add_argument(
         "--dry-run",

@@ -9,6 +9,36 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../s
 from spark import main
 
 
+class TestConfig(unittest.TestCase):
+    def test_get_spark_prefix_default(self):
+        with patch.dict(os.environ, clear=True):
+            with patch("os.path.exists", return_value=False):
+                root = main._get_spark_prefix()
+                self.assertEqual(root, os.path.expanduser("~/.local/opt"))
+
+    def test_get_spark_prefix_env_override(self):
+        with patch.dict(os.environ, {"SPARK_PREFIX": "~/my/custom/prefix"}):
+            root = main._get_spark_prefix()
+            self.assertEqual(root, os.path.expanduser("~/my/custom/prefix"))
+
+    def test_get_spark_prefix_from_config(self):
+        config_content = b'[core]\nprefix = "~/custom/opt"'
+        # Patch CONFIG_HOME since it's evaluated at module load
+        with patch("spark.main.CONFIG_HOME", "/path/to/spark_config_home"):
+            with patch("os.path.exists", return_value=True):
+                with patch("builtins.open", mock_open(read_data=config_content)):
+                    root = main._get_spark_prefix()
+                    self.assertEqual(root, os.path.expanduser("~/custom/opt"))
+
+    def test_get_spark_prefix_invalid_toml(self):
+        config_content = b"invalid toml"
+        with patch("spark.main.CONFIG_HOME", "/path/to/spark_config_home"):
+            with patch("os.path.exists", return_value=True):
+                with patch("builtins.open", mock_open(read_data=config_content)):
+                    root = main._get_spark_prefix()
+                    self.assertEqual(root, os.path.expanduser("~/.local/opt"))
+
+
 class TestSparkInstaller(unittest.TestCase):
     @patch("urllib.request.urlopen")
     def test_get_remote_version(self, mock_urlopen):
@@ -425,7 +455,7 @@ class TestSparkInstaller(unittest.TestCase):
     )
     def test_load_recipe_fallback_global(self, mock_file, mock_exists, mock_expanduser):
         mock_expanduser.side_effect = lambda path: path.replace("~", "/home/user")
-        expected_global_path = "/home/user/.config/spark/recipes/myrecipe.toml"
+        expected_global_path = os.path.join(main.GLOBAL_RECIPES_DIR, "myrecipe.toml")
         mock_exists.side_effect = lambda path: (
             path in (expected_global_path, os.path.dirname(expected_global_path))
         )
@@ -635,7 +665,7 @@ class TestSparkInstaller(unittest.TestCase):
         }
         version = main.get_local_version(recipe)
         self.assertEqual(version, "4.5.6")
-        expected_path = os.path.join(main.SPARK_OPT_ROOT, "app", "version.txt")
+        expected_path = os.path.join(main.SPARK_PREFIX, "app", "version.txt")
         mock_file.assert_called_once_with(expected_path, "r")
 
     @patch("os.path.exists")
@@ -651,7 +681,7 @@ class TestSparkInstaller(unittest.TestCase):
         }
         version = main.get_local_version(recipe)
         self.assertEqual(version, "7.8.9")
-        expected_path = os.path.join(main.SPARK_OPT_ROOT, "app", ".spark-manifest.toml")
+        expected_path = os.path.join(main.SPARK_PREFIX, "app", ".spark-manifest.toml")
         mock_file.assert_called_once_with(expected_path, "rb")
 
     @patch("os.path.exists")
