@@ -228,7 +228,7 @@ class TestSparkInstaller(unittest.TestCase):
             "install": {"target_dir": "dir"},
         }
 
-        with patch("sys.argv", ["spark", "install", "fake-app"]):
+        with patch("sys.argv", ["spark", "upgrade", "fake-app"]):
             with self.assertRaises(SystemExit) as cm:
                 main.main()
             self.assertEqual(cm.exception.code, 0)
@@ -781,7 +781,7 @@ class TestSparkInstaller(unittest.TestCase):
             "install": {"target_dir": "dir"},
         }
 
-        with patch("sys.argv", ["spark", "install", "app"]):
+        with patch("sys.argv", ["spark", "upgrade", "app"]):
             with self.assertRaises(SystemExit) as cm:
                 main.main()
             self.assertEqual(cm.exception.code, 0)

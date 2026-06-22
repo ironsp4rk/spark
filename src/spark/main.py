@@ -623,14 +623,14 @@ def update_repositories():
         print("Finished updating recipe repositories.")
 
 
-def process_install(recipe_arg: str, dry_run: bool, force: bool):
+def process_install(
+    recipe_arg: str, dry_run: bool, force: bool, is_upgrade: bool = False
+):
     recipe = load_recipe(recipe_arg)
     name = recipe.get("package", {}).get("name", "Unknown")
 
     if dry_run:
         print(f"Executing dry-run for {name}...")
-    else:
-        print(f"Installing {name}...")
 
     remote_version = get_remote_version(recipe)
     local_version = get_local_version(recipe)
@@ -649,14 +649,32 @@ def process_install(recipe_arg: str, dry_run: bool, force: bool):
     print(f"Latest Version: {remote_version}")
     print(f"Local Version:  {local_version if local_version else 'Not installed'}")
 
-    if local_cmp == remote_cmp and not force:
-        print(f"{name} is already installed and up to date.\n")
-        return
+    if is_upgrade:
+        if not local_cmp:
+            print(
+                f"Error: {name} is not installed. Use 'spark install {recipe_arg}' to install."
+            )
+            sys.exit(1)
 
-    if force and local_cmp == remote_cmp:
-        print(f"Force updating/re-installing {name} version {remote_version}...")
+        if local_cmp == remote_cmp and not force:
+            print(f"{name} is already up to date.\n")
+            return
+
+        if force and local_cmp == remote_cmp:
+            print(f"Force upgrading {name} version {remote_version}...")
+        else:
+            print(f"Upgrading {name} to version {remote_version}...")
     else:
-        print(f"Updating/Installing {name} to version {remote_version}...")
+        if local_cmp and not force:
+            print(
+                f"Error: {name} is already installed (version {local_version}). Use 'spark upgrade {recipe_arg}' to update, or use --force to overwrite.\n"
+            )
+            sys.exit(1)
+
+        if force and local_cmp:
+            print(f"Force installing {name} version {remote_version}...")
+        else:
+            print(f"Installing {name} version {remote_version}...")
 
     executable_path = recipe.get("install", {}).get("executable_path", "")
     if executable_path and not dry_run:
@@ -756,7 +774,7 @@ def process_install(recipe_arg: str, dry_run: bool, force: bool):
 
 def process_upgrade(app: str | None, dry_run: bool):
     if app:
-        process_install(app, dry_run, False)
+        process_install(app, dry_run, False, is_upgrade=True)
         return
 
     if not os.path.exists(SPARK_OPT_ROOT):
@@ -792,7 +810,7 @@ def process_upgrade(app: str | None, dry_run: bool):
             continue
 
         print(f"--- Checking for updates for {pkg_name} ---")
-        process_install(recipe_name, dry_run, False)
+        process_install(recipe_name, dry_run, False, is_upgrade=True)
 
 
 def main():
@@ -803,12 +821,10 @@ def main():
 
     subparsers.add_parser("update", help="Update all recipe repositories")
 
-    install_parser = subparsers.add_parser(
-        "install", help="Install or update a package recipe"
-    )
+    install_parser = subparsers.add_parser("install", help="Install a package")
     install_parser.add_argument("recipe", help="Recipe name or path to TOML file")
     install_parser.add_argument(
-        "-f", "--force", action="store_true", help="Force update/re-install"
+        "-f", "--force", action="store_true", help="Force install a package (overwrite existing)"
     )
     install_parser.add_argument(
         "--dry-run",
