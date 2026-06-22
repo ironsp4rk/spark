@@ -17,6 +17,7 @@
 * **Declarative Configs:** Application installations are defined entirely by local TOML recipes.
 * **Idempotency:** Re-running an installation should safely overwrite/update existing files without leaving orphaned data.
 * **Coding Standard:** Write robust, error-handled Python. Prioritize objective correctness and execution speed.
+* **DRY Principle (Don't Repeat Yourself):** Avoid duplicated code, especially for repetitive dictionary lookups (e.g., parsing deeply nested TOML recipe fields) and standard error handling. Extract these into dedicated helper functions (e.g., `get_package_name(recipe)`, `fatal_error(msg)`).
 * **Verification Workflow:** Always run the linter (`uv run ruff check`), formatter (`uv run ruff format`), static type checker (`uv run mypy .`), and tests (`uv run pytest`) after making any code changes.
 
 ## Directory Structure
@@ -96,3 +97,6 @@ categories = "Network;Utility;"
 terminal = false
 comment = "Sync your files visually"
 ```
+
+## AI Tool Usage
+* **Prefer Native Tools:** Always prioritize built-in native tools (`view_file`, `write_to_file`, `replace_file_content`, `grep_search`, `list_dir`) over executing generic shell commands (like `cat`, `grep`, `sed`, `ls`, or `awk`) via the terminal. Use the shell only when a specific native tool is not available for the task.
