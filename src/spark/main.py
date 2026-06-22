@@ -947,6 +947,24 @@ def process_upgrade(app: str | None, dry_run: bool):
         process_install(recipe_name, dry_run, False, is_upgrade=True)
 
 
+def process_list():
+    if not os.path.exists(SPARK_PREFIX):
+        return
+
+    installed = []
+    for item in os.listdir(SPARK_PREFIX):
+        item_path = os.path.join(SPARK_PREFIX, item)
+        if os.path.isdir(item_path):
+            manifest = read_manifest(item_path)
+            if manifest:
+                recipe_name = manifest.get("recipe_name")
+                if recipe_name:
+                    installed.append(recipe_name)
+
+    for pkg in sorted(installed):
+        print(pkg)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="S.P.A.R.K. (Standalone Package Acquisition & Resolution Kit) - A custom package manager designed to acquire, extract, and integrate pre-compiled application binaries from arbitrary web sources into user-space."
@@ -954,6 +972,8 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("update", help="Update all recipe repositories")
+
+    subparsers.add_parser("list", help="List installed packages")
 
     install_parser = subparsers.add_parser("install", help="Install a package")
     install_parser.add_argument("recipe", help="Recipe name or path to TOML file")
@@ -997,6 +1017,10 @@ def main():
 
     if args.command == "update":
         update_repositories()
+        sys.exit(0)
+
+    if args.command == "list":
+        process_list()
         sys.exit(0)
 
     if args.command == "install":

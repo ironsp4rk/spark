@@ -914,6 +914,38 @@ class TestSparkInstaller(unittest.TestCase):
         mock_remove.assert_not_called()
         mock_input.assert_called_once()
 
+    @patch("os.path.exists")
+    @patch("os.listdir")
+    @patch("os.path.isdir")
+    @patch("spark.main.read_manifest")
+    @patch("sys.stdout", new_callable=io.StringIO)
+    def test_process_list(
+        self,
+        mock_stdout,
+        mock_read_manifest,
+        mock_isdir,
+        mock_listdir,
+        mock_exists,
+    ):
+        mock_exists.return_value = True
+        mock_listdir.return_value = ["app1", "app2", "app3"]
+        mock_isdir.return_value = True
+
+        def side_effect_read_manifest(path):
+            if "app1" in path:
+                return {"recipe_name": "recipe1"}
+            elif "app2" in path:
+                return {}
+            else:
+                return None
+
+        mock_read_manifest.side_effect = side_effect_read_manifest
+
+        main.process_list()
+
+        output = mock_stdout.getvalue().strip().split("\n")
+        self.assertEqual(output, ["recipe1"])
+
 
 if __name__ == "__main__":
     unittest.main()
