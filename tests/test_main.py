@@ -1145,6 +1145,63 @@ class TestSparkInstaller(unittest.TestCase):
             self.assertIn("/custom/path/app2.toml", output)
             self.assertNotIn("Artifacts", output)
 
+    @patch("sys.stdout", new_callable=io.StringIO)
+    def test_process_recipes(self, mock_stdout):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_dir = os.path.join(temp_dir, "local")
+            global_dir = os.path.join(temp_dir, "global")
+            core_dir = os.path.join(global_dir, "core")
+
+            os.makedirs(local_dir)
+            os.makedirs(global_dir)
+            os.makedirs(core_dir)
+
+            # Local recipe
+            with open(os.path.join(local_dir, "app1.toml"), "w") as f:
+                f.write(
+                    '[package]\nname = "App1"\ndescription = "Local app"\n[version]\nurl = "http://app1"'
+                )
+
+            # Global recipe in a subdir
+            subdir = os.path.join(global_dir, "subdir")
+            os.makedirs(subdir)
+            with open(os.path.join(subdir, "app2.toml"), "w") as f:
+                f.write(
+                    '[package]\nname = "App2"\ndescription = "Global app"\n[version]\nurl = "http://app2"'
+                )
+
+            # Core recipe
+            with open(os.path.join(core_dir, "app3.toml"), "w") as f:
+                f.write(
+                    '[package]\nname = "App3"\ndescription = "Core app"\n[version]\nurl = "http://app3"'
+                )
+
+            with patch("spark.main.LOCAL_RECIPES_DIR", local_dir):
+                with patch("spark.main.GLOBAL_RECIPES_DIR", global_dir):
+                    with patch(
+                        "spark.main.CORE_REPO_URL", "https://github.com/test/repo"
+                    ):
+                        main.process_recipes()
+
+            output = mock_stdout.getvalue()
+
+            self.assertIn("App1", output)
+            self.assertIn("Local app", output)
+            self.assertIn("http://app1", output)
+            self.assertIn(os.path.join(local_dir, "app1.toml"), output)
+
+            self.assertIn("App2", output)
+            self.assertIn("Global app", output)
+            self.assertIn("http://app2", output)
+            self.assertIn(os.path.join(subdir, "app2.toml"), output)
+
+            self.assertIn("App3", output)
+            self.assertIn("Core app", output)
+            self.assertIn("http://app3", output)
+            self.assertIn("https://github.com/test/repo/blob/main/app3.toml", output)
+
 
 if __name__ == "__main__":
     unittest.main()

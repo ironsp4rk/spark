@@ -110,6 +110,23 @@ def get_package_name(recipe: Dict[str, Any]) -> str:
     return recipe.get("package", {}).get("name", "app")
 
 
+def get_package_description(recipe: Dict[str, Any]) -> str:
+    return recipe.get("package", {}).get("description", "")
+
+
+def get_version_url(recipe: Dict[str, Any]) -> str:
+    return recipe.get("version", {}).get("url", "")
+
+
+def get_recipe_source_url(path: str) -> str:
+    global_base_dir = os.path.expanduser(GLOBAL_RECIPES_DIR)
+    core_dir = os.path.join(global_base_dir, "core")
+    if path.startswith(core_dir + os.sep):
+        rel_path = os.path.relpath(path, core_dir)
+        return f"{CORE_REPO_URL}/blob/main/{rel_path}"
+    return path
+
+
 def get_relative_executable_path(recipe: Dict[str, Any]) -> str:
     return recipe.get("install", {}).get("executable_path", "")
 
@@ -705,8 +722,8 @@ def install_desktop_file(
 
 def update_repositories():
     local_base_dir = os.path.abspath(LOCAL_RECIPES_DIR)
-    prod_base_dir = os.path.expanduser(GLOBAL_RECIPES_DIR)
-    search_dirs = [local_base_dir, prod_base_dir]
+    global_base_dir = os.path.expanduser(GLOBAL_RECIPES_DIR)
+    search_dirs = [local_base_dir, global_base_dir]
 
     updated_any = False
     core_repo_found = False
@@ -738,9 +755,9 @@ def update_repositories():
                         )
 
     if not core_repo_found:
-        core_dir = os.path.join(prod_base_dir, "core")
+        core_dir = os.path.join(global_base_dir, "core")
         print(f"Core repository not found. Cloning into {core_dir}...")
-        os.makedirs(prod_base_dir, exist_ok=True)
+        os.makedirs(global_base_dir, exist_ok=True)
         try:
             subprocess.run(["git", "clone", CORE_REPO_URL, core_dir], check=True)
             updated_any = True
@@ -1150,6 +1167,56 @@ def process_package_info(package_arg: str):
             print(f"Desktop: {desktop_dest}")
 
 
+def process_recipes():
+    local_base_dir = os.path.abspath(LOCAL_RECIPES_DIR)
+    global_base_dir = os.path.expanduser(GLOBAL_RECIPES_DIR)
+    search_dirs = [local_base_dir]
+    if global_base_dir != local_base_dir:
+        search_dirs.append(global_base_dir)
+
+    recipes_files = []
+
+    for base_dir in search_dirs:
+        if not os.path.exists(base_dir):
+            continue
+
+        for item in os.listdir(base_dir):
+            path = os.path.join(base_dir, item)
+            if os.path.isfile(path) and path.endswith(".toml"):
+                recipes_files.append(path)
+            elif os.path.isdir(path):
+                for subitem in os.listdir(path):
+                    subpath = os.path.join(path, subitem)
+                    if os.path.isfile(subpath) and subpath.endswith(".toml"):
+                        recipes_files.append(subpath)
+
+    recipe_entries = []
+    for path in recipes_files:
+        try:
+            with open(path, "rb") as f:
+                recipe = tomllib.load(f)
+
+            recipe_entries.append(
+                {
+                    "name": get_package_name(recipe),
+                    "desc": get_package_description(recipe),
+                    "version_url": get_version_url(recipe),
+                    "source": get_recipe_source_url(path),
+                }
+            )
+        except Exception:
+            continue
+
+    recipe_entries.sort(key=lambda x: x["name"].lower())
+
+    for i, entry in enumerate(recipe_entries):
+        if i > 0:
+            print()
+        print(f"{green('==>')} {bold(entry['name'])}: {entry['desc']}")
+        print(underline(entry["version_url"]))
+        print(underline(entry["source"]))
+
+
 def process_info_command(package: str | None, show_installed: bool = False):
     if show_installed:
         installed = get_installed_packages()
@@ -1197,6 +1264,8 @@ def main():
 
     subparsers.add_parser("list", help="List installed packages")
 
+    subparsers.add_parser("recipes", help="List all known recipes")
+
     uninstall_parser = subparsers.add_parser("uninstall", help="Uninstall a package")
     uninstall_parser.add_argument("recipe", help="Recipe name or path to TOML file")
     uninstall_parser.add_argument(
@@ -1237,6 +1306,10 @@ def main():
 
     if args.command == "list":
         process_list()
+        sys.exit(0)
+
+    if args.command == "recipes":
+        process_recipes()
         sys.exit(0)
 
     if args.command == "uninstall":
