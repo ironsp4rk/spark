@@ -1011,6 +1011,26 @@ class TestSparkInstaller(unittest.TestCase):
                                 self.assertIn("1 packages, 5 files", output)
                                 self.assertIn("B", output)
 
+    @patch("spark.main.get_installed_packages")
+    @patch("spark.main.process_package_info")
+    def test_process_info_command_installed(
+        self, mock_process_package_info, mock_get_installed_packages
+    ):
+        # Setup mock installed packages
+        mock_get_installed_packages.return_value = ["app1", "app2"]
+
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            main.process_info_command(package=None, show_installed=True)
+            output = mock_stdout.getvalue()
+
+            # Since there are 2 packages, we should see one blank line
+            self.assertEqual(output.count("\n"), 1)
+
+            # verify process_package_info was called for both
+            mock_process_package_info.assert_any_call("app1")
+            mock_process_package_info.assert_any_call("app2")
+            self.assertEqual(mock_process_package_info.call_count, 2)
+
     def test_get_disk_usage(self):
         mock_st = MagicMock(spec=os.stat_result)
         mock_st.st_blocks = 10

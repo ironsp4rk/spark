@@ -1018,9 +1018,9 @@ def process_upgrade(package: str | None, dry_run: bool):
         process_install(recipe_name, dry_run, False, is_upgrade=True)
 
 
-def process_list():
+def get_installed_packages() -> list[str]:
     if not os.path.exists(SPARK_PREFIX):
-        return
+        return []
 
     installed = []
     for item in os.listdir(SPARK_PREFIX):
@@ -1032,7 +1032,11 @@ def process_list():
                 if recipe_name:
                     installed.append(recipe_name)
 
-    for pkg in sorted(installed):
+    return sorted(installed)
+
+
+def process_list():
+    for pkg in get_installed_packages():
         print(pkg)
 
 
@@ -1146,8 +1150,14 @@ def process_package_info(package_arg: str):
             print(f"Desktop: {desktop_dest}")
 
 
-def process_info_command(package: str | None):
-    if package:
+def process_info_command(package: str | None, show_installed: bool = False):
+    if show_installed:
+        installed = get_installed_packages()
+        for i, pkg in enumerate(installed):
+            if i > 0:
+                print()
+            process_package_info(pkg)
+    elif package:
         process_package_info(package)
     else:
         process_global_info()
@@ -1164,6 +1174,11 @@ def main():
     )
     info_parser.add_argument(
         "package", nargs="?", help="Specific package to show info for (optional)"
+    )
+    info_parser.add_argument(
+        "--installed",
+        action="store_true",
+        help="Display info for all installed packages",
     )
 
     install_parser = subparsers.add_parser("install", help="Install a package")
@@ -1211,7 +1226,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "info":
-        process_info_command(args.package)
+        process_info_command(args.package, getattr(args, "installed", False))
         sys.exit(0)
 
     if args.command == "install":
