@@ -9,7 +9,7 @@ import tempfile
 import tomllib
 import urllib.request
 import urllib.parse
-from typing import Any, Dict
+from typing import Any, Dict, NoReturn
 
 CORE_REPO_URL = "https://github.com/ironsp4rk/spark-recipes"
 LOCAL_RECIPES_DIR = os.path.abspath(
@@ -21,6 +21,63 @@ CONFIG_HOME = os.path.join(
 GLOBAL_RECIPES_DIR = os.path.join(CONFIG_HOME, "recipes")
 DEFAULT_CLI_DIR = "~/.local/bin"
 DEFAULT_DESKTOP_DIR = "~/.local/share/applications"
+
+
+def fatal_error(message: str) -> NoReturn:
+    print(f"Error: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def get_package_name(recipe: Dict[str, Any]) -> str:
+    return recipe.get("package", {}).get("name", "app")
+
+
+def get_relative_executable_path(recipe: Dict[str, Any]) -> str:
+    return recipe.get("install", {}).get("executable_path", "")
+
+
+def get_executable_path(recipe: Dict[str, Any], target_dir: str) -> str:
+    return os.path.join(target_dir, get_relative_executable_path(recipe))
+
+
+def get_cli_symlink_path(recipe: Dict[str, Any]) -> str | None:
+    cli_name = recipe.get("package", {}).get("cli_name")
+    if not cli_name:
+        return None
+    return os.path.join(get_cli_dir(recipe), cli_name)
+
+
+def read_manifest(target_dir: str) -> Dict[str, Any] | None:
+    manifest_path = os.path.join(target_dir, MANIFEST_FILENAME)
+    if os.path.exists(manifest_path):
+        try:
+            with open(manifest_path, "rb") as f:
+                return tomllib.load(f)
+        except Exception:
+            pass
+    return None
+
+
+def build_http_request(url: str) -> urllib.request.Request:
+    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
+    return urllib.request.Request(url, headers=headers)
+
+
+def get_desktop_dest_path(desktop_file: str) -> str:
+    desktop_dir = os.path.expanduser(DEFAULT_DESKTOP_DIR)
+    return os.path.join(desktop_dir, os.path.basename(desktop_file))
+
+
+def remove_symlink_if_exists(path: str) -> None:
+    if os.path.exists(path) or os.path.islink(path):
+        os.remove(path)
+
+
+def extract_pattern(text: str, pattern: str) -> str | None:
+    if not pattern:
+        return None
+    match = re.search(pattern, text)
+    return match.group(1) if match else None
 
 
 def _get_spark_prefix() -> str:
@@ -51,13 +108,9 @@ MANIFEST_FILENAME = ".spark-manifest.toml"
 def get_target_dir(recipe: Dict[str, Any]) -> str:
     dir_name = recipe.get("install", {}).get("dir_name")
     if not dir_name:
-        dir_name = recipe.get("package", {}).get("name")
+        dir_name = get_package_name(recipe)
     if not dir_name:
-        print(
-            "Error: Could not determine directory name for installation.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        fatal_error("Could not determine directory name for installation.")
 
     dir_name = dir_name.replace("/", "-").replace("\\", "-")
     return os.path.join(SPARK_PREFIX, dir_name)
@@ -76,7 +129,7 @@ def get_desktop_filename(recipe: Dict[str, Any]) -> str | None:
         return None
 
     if not desktop_file:
-        pkg_name = recipe.get("package", {}).get("name", "app")
+        pkg_name = get_package_name(recipe)
         desktop_file = f"{pkg_name}.desktop"
 
     return desktop_file
@@ -128,10 +181,7 @@ def load_recipe(recipe_path_or_name: str) -> Dict[str, Any]:
             )
 
     if not os.path.exists(path):
-        print(
-            f"Error: Recipe file not found for '{recipe_path_or_name}'", file=sys.stderr
-        )
-        sys.exit(1)
+        fatal_error(f"Recipe file not found for '{recipe_path_or_name}'")
 
     try:
         with open(path, "rb") as f:
@@ -140,8 +190,7 @@ def load_recipe(recipe_path_or_name: str) -> Dict[str, Any]:
             print(f"Using recipe: {path}")
             return recipe
     except Exception as e:
-        print(f"Error parsing recipe TOML file '{path}': {e}", file=sys.stderr)
-        sys.exit(1)
+        fatal_error(f"parsing recipe TOML file '{path}': {e}")
 
 
 def get_local_pattern(recipe: Dict[str, Any]) -> str:
@@ -157,10 +206,9 @@ def get_remote_pattern(recipe: Dict[str, Any]) -> str:
 
 
 def get_local_version(recipe: Dict[str, Any]) -> str:
-    cli_name = recipe.get("package", {}).get("cli_name")
-    cli_dir = get_cli_dir(recipe)
+    cli_symlink_path = get_cli_symlink_path(recipe)
 
-    executable_path = recipe.get("install", {}).get("executable_path")
+    executable_path = get_relative_executable_path(recipe)
     target_dir = get_target_dir(recipe)
 
     version_config = recipe.get("version", {})
@@ -168,14 +216,9 @@ def get_local_version(recipe: Dict[str, Any]) -> str:
 
     if local_strategy == "manifest":
         if target_dir:
-            manifest_path = os.path.join(target_dir, MANIFEST_FILENAME)
-            if os.path.exists(manifest_path):
-                try:
-                    with open(manifest_path, "rb") as f:
-                        manifest = tomllib.load(f)
-                        return manifest.get("version", "")
-                except Exception:
-                    pass
+            manifest = read_manifest(target_dir)
+            if manifest:
+                return manifest.get("version", "")
         return ""
 
     if local_strategy == "file":
@@ -187,18 +230,17 @@ def get_local_version(recipe: Dict[str, Any]) -> str:
                     with open(local_file_path, "r") as f:
                         content = f.read()
                     pattern = get_local_pattern(recipe)
-                    if pattern:
-                        match = re.search(pattern, content)
-                        if match:
-                            return match.group(1)
+                    version = extract_pattern(content, pattern)
+                    if version:
+                        return version
                 except Exception:
                     pass
         return ""
 
     if local_strategy == "cli":
         check_paths = []
-        if cli_name:
-            check_paths.append(os.path.join(cli_dir, cli_name))
+        if cli_symlink_path:
+            check_paths.append(cli_symlink_path)
         if target_dir and executable_path:
             check_paths.append(os.path.join(target_dir, executable_path))
 
@@ -209,10 +251,9 @@ def get_local_version(recipe: Dict[str, Any]) -> str:
                         [path, "--version"], capture_output=True, text=True, check=True
                     )
                     pattern = get_local_pattern(recipe)
-                    if pattern:
-                        match = re.search(pattern, result.stdout)
-                        if match:
-                            return match.group(1)
+                    version = extract_pattern(result.stdout, pattern)
+                    if version:
+                        return version
                 except Exception:
                     pass
     return ""
@@ -222,18 +263,13 @@ def get_remote_version(recipe: Dict[str, Any]) -> str:
     version_url = recipe.get("version", {}).get("url")
     pattern = get_remote_pattern(recipe)
     if not version_url or not pattern:
-        print(
-            "Error: version url or remote_pattern not defined in recipe.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        fatal_error("version url or remote_pattern not defined in recipe.")
 
     search_linked_js = recipe.get("version", {}).get("search_linked_js", False)
-    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
 
     def fetch_url_text(url: str) -> str:
         print(f"Checking version URL: {url}")
-        req = urllib.request.Request(url, headers=headers)
+        req = build_http_request(url)
         try:
             with urllib.request.urlopen(req) as response:
                 encoding = response.headers.get_content_charset()
@@ -246,8 +282,7 @@ def get_remote_version(recipe: Dict[str, Any]) -> str:
                     content = gzip.decompress(content)
                 return content.decode(encoding, errors="replace")
         except Exception as e:
-            print(f"Error fetching URL '{url}': {e}", file=sys.stderr)
-            sys.exit(1)
+            fatal_error(f"fetching URL '{url}': {e}")
 
     content_to_search = fetch_url_text(version_url)
 
@@ -258,36 +293,26 @@ def get_remote_version(recipe: Dict[str, Any]) -> str:
         all_js_paths = list(dict.fromkeys(script_paths + preload_paths))
 
         if not all_js_paths:
-            print(
-                "Error: Could not find any JS scripts referenced in the page HTML.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+            fatal_error("Could not find any JS scripts referenced in the page HTML.")
 
         found_match = None
         for js_path in all_js_paths:
             js_url = urllib.parse.urljoin(version_url, js_path)
             js_text = fetch_url_text(js_url)
-            match = re.search(pattern, js_text)
-            if match:
-                found_match = match.group(1)
+            found_match = extract_pattern(js_text, pattern)
+            if found_match:
                 break
 
         if not found_match:
-            print(
-                "Error: Could not parse remote version from any referenced scripts.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+            fatal_error("Could not parse remote version from any referenced scripts.")
 
         return found_match
 
-    match = re.search(pattern, content_to_search)
-    if not match:
-        print("Error: Could not parse remote version from URL.", file=sys.stderr)
-        sys.exit(1)
+    version = extract_pattern(content_to_search, pattern)
+    if not version:
+        fatal_error("Could not parse remote version from URL.")
 
-    return match.group(1)
+    return version
 
 
 def is_process_running(executable_name: str) -> bool:
@@ -328,14 +353,12 @@ def ensure_not_running(executable_name: str):
 
 
 def download_file(url: str, dest: str):
-    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-    req = urllib.request.Request(url, headers=headers)
+    req = build_http_request(url)
     try:
         with urllib.request.urlopen(req) as response, open(dest, "wb") as out_file:
             shutil.copyfileobj(response, out_file)
     except Exception as e:
-        print(f"Error downloading {url}: {e}", file=sys.stderr)
-        sys.exit(1)
+        fatal_error(f"downloading {url}: {e}")
 
 
 def verify_gpg(archive_path: str, signature_path: str, pubkey_path: str, tempdir: str):
@@ -416,7 +439,7 @@ def extract_archive(
 
 
 def make_executable(recipe: Dict[str, Any], target_dir: str, dry_run: bool = False):
-    executable_path = recipe.get("install", {}).get("executable_path", "")
+    executable_path = get_relative_executable_path(recipe)
     if executable_path:
         bin_path = os.path.join(target_dir, executable_path)
         if dry_run:
@@ -436,14 +459,13 @@ def make_executable(recipe: Dict[str, Any], target_dir: str, dry_run: bool = Fal
 
 
 def create_cli_symlink(recipe: Dict[str, Any], target_dir: str, dry_run: bool = False):
-    cli_name = recipe.get("package", {}).get("cli_name")
-    if not cli_name:
+    cli_symlink_path = get_cli_symlink_path(recipe)
+    if not cli_symlink_path:
         return
 
     cli_dir = get_cli_dir(recipe)
-    cli_symlink_path = os.path.join(cli_dir, cli_name)
 
-    executable_path = recipe.get("install", {}).get("executable_path", "")
+    executable_path = get_relative_executable_path(recipe)
     target_exec = os.path.join(target_dir, executable_path)
 
     if dry_run:
@@ -452,8 +474,7 @@ def create_cli_symlink(recipe: Dict[str, Any], target_dir: str, dry_run: bool = 
         print(f"[Dry-run] Would create symlink: {cli_symlink_path} -> {target_exec}")
     else:
         os.makedirs(cli_dir, exist_ok=True)
-        if os.path.exists(cli_symlink_path) or os.path.islink(cli_symlink_path):
-            os.remove(cli_symlink_path)
+        remove_symlink_if_exists(cli_symlink_path)
         os.symlink(target_exec, cli_symlink_path)
 
 
@@ -501,7 +522,7 @@ def generate_new_desktop_file(
     lines.append("Type=Application")
 
     # Override target executable path and icon path
-    executable_path = recipe.get("install", {}).get("executable_path", "")
+    executable_path = get_relative_executable_path(recipe)
     new_exec = os.path.join(target_dir, executable_path)
     exec_args = integration.get("exec_args")
     if exec_args:
@@ -540,7 +561,7 @@ def patch_existing_desktop_file(
     with open(src_desktop, "r") as f:
         content = f.read()
 
-    executable_path = recipe.get("install", {}).get("executable_path", "")
+    executable_path = get_relative_executable_path(recipe)
     new_exec = os.path.join(planned_target_dir, executable_path)
 
     escaped_exe = re.escape(os.path.basename(executable_path))
@@ -589,7 +610,7 @@ def install_desktop_file(
             return
 
     desktop_dir = os.path.expanduser(DEFAULT_DESKTOP_DIR)
-    dest_path = os.path.join(desktop_dir, os.path.basename(desktop_file))
+    dest_path = get_desktop_dest_path(desktop_file)
 
     if dry_run:
         print(f"[Dry-run] Would create directory: {desktop_dir}")
@@ -670,7 +691,7 @@ def process_install(
     recipe_arg: str, dry_run: bool, force: bool, is_upgrade: bool = False
 ):
     recipe = load_recipe(recipe_arg)
-    name = recipe.get("package", {}).get("name", "Unknown")
+    name = get_package_name(recipe)
 
     if dry_run:
         print(f"Executing dry-run for {name}...")
@@ -719,14 +740,13 @@ def process_install(
         else:
             print(f"Installing {name} version {remote_version}...")
 
-    executable_path = recipe.get("install", {}).get("executable_path", "")
+    executable_path = get_relative_executable_path(recipe)
     if executable_path:
         ensure_not_running(os.path.basename(executable_path))
 
     download_url_template = recipe.get("download", {}).get("url", "")
     if not download_url_template:
-        print("Error: download url not defined in recipe.", file=sys.stderr)
-        sys.exit(1)
+        fatal_error("download url not defined in recipe.")
     download_url = download_url_template.replace("{version}", remote_version)
 
     download_format = recipe.get("download", {}).get("format", "")
@@ -817,7 +837,7 @@ def process_install(
 
 def process_uninstall(recipe_arg: str, yes: bool, dry_run: bool = False):
     recipe = load_recipe(recipe_arg)
-    name = recipe.get("package", {}).get("name", "Unknown")
+    name = get_package_name(recipe)
 
     if dry_run:
         print(f"Executing dry-run uninstallation for {name}...")
@@ -847,21 +867,20 @@ def process_uninstall(recipe_arg: str, yes: bool, dry_run: bool = False):
             print("Uninstallation aborted.")
             return
 
-    executable_path = recipe.get("install", {}).get("executable_path", "")
+    executable_path = get_relative_executable_path(recipe)
     if executable_path:
         ensure_not_running(os.path.basename(executable_path))
 
     # Remove CLI symlink
-    cli_name = recipe.get("package", {}).get("cli_name")
-    if cli_name:
-        cli_dir = get_cli_dir(recipe)
-        cli_symlink_path = os.path.join(cli_dir, cli_name)
-        if os.path.exists(cli_symlink_path) or os.path.islink(cli_symlink_path):
-            if dry_run:
-                print(f"[Dry-run] Would remove CLI symlink: {cli_symlink_path}")
-            else:
-                print(f"Removing CLI symlink: {cli_symlink_path}")
-                os.remove(cli_symlink_path)
+    cli_symlink_path = get_cli_symlink_path(recipe)
+    if cli_symlink_path and (
+        os.path.exists(cli_symlink_path) or os.path.islink(cli_symlink_path)
+    ):
+        if dry_run:
+            print(f"[Dry-run] Would remove CLI symlink: {cli_symlink_path}")
+        else:
+            print(f"Removing CLI symlink: {cli_symlink_path}")
+            remove_symlink_if_exists(cli_symlink_path)
 
     # Remove desktop file
     desktop_file = get_desktop_filename(recipe)
@@ -901,15 +920,14 @@ def process_upgrade(app: str | None, dry_run: bool):
     for item in os.listdir(SPARK_PREFIX):
         item_path = os.path.join(SPARK_PREFIX, item)
         if os.path.isdir(item_path):
-            manifest_file = os.path.join(item_path, MANIFEST_FILENAME)
-            if os.path.exists(manifest_file):
-                try:
-                    with open(manifest_file, "rb") as f:
-                        manifest = tomllib.load(f)
-                        manifests.append((item, manifest))
-                except Exception as e:
+            manifest = read_manifest(item_path)
+            if manifest:
+                manifests.append((item, manifest))
+            else:
+                manifest_file = os.path.join(item_path, MANIFEST_FILENAME)
+                if os.path.exists(manifest_file):
                     print(
-                        f"Warning: Could not read manifest at {manifest_file}: {e}",
+                        f"Warning: Could not read manifest at {manifest_file}",
                         file=sys.stderr,
                     )
 
